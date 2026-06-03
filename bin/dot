@@ -11,7 +11,8 @@ Usage: dot <command>
 Commands:
   bootstrap  Run the repository bootstrap script
   apply      Apply the chezmoi source directory
-  packages   Run the detected platform package script
+  packages [install|update|upgrade|build]
+             Run the detected platform package script
   fonts      Install or update preferred terminal fonts
   tools      Install or update prebuilt user-local CLI tools
   zsh-plugins  Install or update Antidote-managed zsh plugins
@@ -47,6 +48,8 @@ resolve_chezmoi() {
     printf '%s\n' "$CHEZMOI"
   elif has_command chezmoi; then
     printf '%s\n' "chezmoi"
+  elif [ -x "$HOME/.local/bin/chezmoi" ]; then
+    printf '%s\n' "$HOME/.local/bin/chezmoi"
   elif [ -x "$ROOT_DIR/.local/bin/chezmoi" ]; then
     printf '%s\n' "$ROOT_DIR/.local/bin/chezmoi"
   else
@@ -268,6 +271,8 @@ doctor_check() {
   need_packages=0
   need_tools=0
   need_zsh_plugins=0
+
+  refresh_user_path
   CHEZMOI=$(resolve_chezmoi)
 
   check_command_status git packages

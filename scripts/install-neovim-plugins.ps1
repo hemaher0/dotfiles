@@ -35,6 +35,9 @@ function Invoke-Lazy {
     $Profile = if ($env:NVIM_APPNAME) { $env:NVIM_APPNAME } else { "nvim" }
     Write-DotfilesLog "running Neovim profile '$Profile': Lazy $LazyCommand"
     & nvim --headless "+Lazy! $LazyCommand" "+qa"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }
 
 switch ($Command) {

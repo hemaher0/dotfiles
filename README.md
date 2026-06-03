@@ -16,69 +16,38 @@ The repository is managed with `chezmoi`. Bootstrap scripts handle the repeatabl
 
 ## Quick Start
 
-Clone the repository:
+### Ubuntu
 
 ```sh
 git clone https://github.com/hemaher0/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
+./bootstrap.sh
+bin/dot doctor
 ```
 
-Install `chezmoi` if it is not already available:
-
-```sh
-mkdir -p "$HOME/.local/bin"
-sh -c "$(curl -fsLS https://get.chezmoi.io)" -- -b "$HOME/.local/bin"
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Preview changes:
+Preview first when `chezmoi` is already installed:
 
 ```sh
 chezmoi --source "$PWD/home" diff
 ```
 
-Apply and repair the setup:
+### Ubuntu (WSL)
 
 ```sh
+git clone https://github.com/hemaher0/dotfiles.git ~/.dotfiles
+cd ~/.dotfiles
 ./bootstrap.sh
-```
-
-Run a health check:
-
-```sh
 bin/dot doctor
 ```
 
-Install or sync missing supported components:
+WSL uses the Ubuntu package flow and installs Windows fonts through PowerShell when available.
 
-```sh
-bin/dot doctor --fix
-```
-
-## Windows
-
-Clone the repository:
+### Windows
 
 ```powershell
 git clone https://github.com/hemaher0/dotfiles.git $env:USERPROFILE\.dotfiles
 Set-Location $env:USERPROFILE\.dotfiles
-```
-
-Preview changes:
-
-```powershell
-chezmoi --source "$PWD/home" diff
-```
-
-Apply and repair the setup:
-
-```powershell
 .\bootstrap.ps1
-```
-
-Check only:
-
-```powershell
 .\bootstrap.ps1 -CheckOnly
 ```
 
@@ -90,6 +59,20 @@ Update the repository and reapply the Windows setup:
 .\update.ps1
 ```
 
+### Build From Source
+
+Use the user-local build path when `apt` cannot be used or Ubuntu packages are not suitable:
+
+```sh
+git clone https://github.com/hemaher0/dotfiles.git ~/.dotfiles
+cd ~/.dotfiles
+bin/dot packages build
+bin/dot apply
+bin/dot doctor
+```
+
+This installs into `~/.local`, uses prebuilt zoxide, direnv, and Neovim releases, and builds missing zsh from source. zsh requires existing build tools such as `make`, `xz`, and a C compiler. It does not change the login shell.
+
 ## Commands
 
 ```sh
@@ -99,12 +82,15 @@ bin/dot apply
 bin/dot packages
 bin/dot packages update
 bin/dot packages upgrade
+bin/dot packages build
 bin/dot fonts
 bin/dot tools
 bin/dot zsh-plugins
 bin/dot nvim
 bin/dot update
 ```
+
+`bin/dot apply` applies the chezmoi source directory, `home/`, into `$HOME`. It writes managed dotfiles only; package installs, fonts, and plugins are handled by the other commands.
 
 ## Notes
 

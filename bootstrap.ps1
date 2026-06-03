@@ -117,6 +117,67 @@ function Test-FileStatus {
     $script:NeedApply = $true
 }
 
+function Test-WindowsConfigFileStatus {
+    param(
+        [string]$Path,
+        [string]$Description
+    )
+
+    if (Test-Path -Path $Path -PathType Leaf) {
+        Write-DotfilesLog "ok: $Description"
+        return
+    }
+
+    Mark-Missing $Description
+    $script:NeedWindowsConfigSync = $true
+}
+
+function Sync-DirectoryContents {
+    param(
+        [string]$Source,
+        [string]$Target,
+        [string]$Description
+    )
+
+    if (-not (Test-Path -Path $Source -PathType Container)) {
+        Mark-Warning "skipping $Description because source is missing: $Source"
+        return
+    }
+
+    $Parent = Split-Path -Parent $Target
+    New-Item -ItemType Directory -Path $Parent -Force | Out-Null
+
+    if (-not (Test-Path -Path $Target -PathType Container)) {
+        try {
+            Write-DotfilesLog "fix: linking $Description"
+            New-Item -ItemType Junction -Path $Target -Target $Source -Force | Out-Null
+            return
+        }
+        catch {
+            Write-DotfilesLog "warning: failed to create junction for $Description; copying files instead"
+            New-Item -ItemType Directory -Path $Target -Force | Out-Null
+        }
+    }
+
+    $TargetItem = Get-Item -Path $Target -ErrorAction SilentlyContinue
+    if ($TargetItem -and (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        Write-DotfilesLog "ok: $Description link"
+        return
+    }
+
+    Write-DotfilesLog "fix: syncing $Description"
+    Get-ChildItem -Path $Source -Force | ForEach-Object {
+        Copy-Item -Path $_.FullName -Destination $Target -Recurse -Force
+    }
+}
+
+function Sync-WindowsConfigPaths {
+    $ManagedNvimConfig = Join-Path $HOME ".config\nvim"
+    $WindowsNvimConfig = Join-Path (Get-LocalAppData) "nvim"
+
+    Sync-DirectoryContents -Source $ManagedNvimConfig -Target $WindowsNvimConfig -Description "Windows Neovim config"
+}
+
 function Test-FontStatus {
     $FontDir = Join-Path (Get-LocalAppData) "Microsoft\Windows\Fonts"
     $FontChecks = @(
@@ -203,6 +264,7 @@ function Invoke-DoctorCheck {
     $script:NeedNvimPlugins = $false
     $script:NeedPackages = $false
     $script:NeedTools = $false
+    $script:NeedWindowsConfigSync = $false
     $script:Chezmoi = Resolve-Chezmoi
 
     Test-CommandStatus -Name "git" -InstallGroup "packages"
@@ -223,6 +285,8 @@ function Invoke-DoctorCheck {
     Test-FileStatus -Path (Join-Path $HOME ".config\nvim\lua\user\plugins\smart-splits.lua") -Description "Neovim smart-splits config"
     Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\wezterm.lua") -Description "managed WezTerm config"
     Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\user\smart_splits.lua") -Description "WezTerm smart-splits config"
+    Test-WindowsConfigFileStatus -Path (Join-Path (Get-LocalAppData) "nvim\init.lua") -Description "Windows Neovim config"
+    Test-WindowsConfigFileStatus -Path (Join-Path (Get-LocalAppData) "nvim\lua\user\plugins\smart-splits.lua") -Description "Windows Neovim smart-splits config"
 
     Test-FontStatus
     Test-NeovimPluginsStatus
@@ -308,6 +372,11 @@ function Invoke-DoctorFix {
 
     if ($script:NeedApply) {
         Invoke-ChezmoiApply
+        $script:NeedWindowsConfigSync = $true
+    }
+
+    if ($script:NeedWindowsConfigSync) {
+        Sync-WindowsConfigPaths
     }
 
     if ($script:NeedFonts) {
