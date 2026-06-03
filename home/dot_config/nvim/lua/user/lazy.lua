@@ -2,11 +2,30 @@ if vim.env.DOTFILES_NVIM_SKIP_PLUGINS == "1" then
   return
 end
 
+local function is_headless()
+  return #vim.api.nvim_list_uis() == 0
+end
+
+local function fail_bootstrap(message, output)
+  if output and output ~= "" then
+    vim.api.nvim_echo({
+      { message .. "\n", "ErrorMsg" },
+      { output, "WarningMsg" },
+    }, true, {})
+  else
+    vim.api.nvim_err_writeln(message)
+  end
+
+  if is_headless() then
+    vim.cmd("cquit")
+  end
+end
+
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 
 if not (vim.uv or vim.loop).fs_stat(lazypath) then
   if vim.fn.executable("git") == 0 then
-    vim.notify("git is required to install lazy.nvim", vim.log.levels.WARN)
+    fail_bootstrap("git is required to install lazy.nvim")
     return
   end
 
@@ -21,10 +40,7 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
   })
 
   if vim.v.shell_error ~= 0 then
-    vim.api.nvim_echo({
-      { "Failed to clone lazy.nvim:\n", "ErrorMsg" },
-      { output, "WarningMsg" },
-    }, true, {})
+    fail_bootstrap("Failed to clone lazy.nvim:", output)
     return
   end
 end

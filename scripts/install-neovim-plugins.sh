@@ -30,7 +30,9 @@ run_lazy() {
   fi
 
   log "running Neovim profile '$NVIM_APPNAME': Lazy $lazy_command"
-  NVIM_APPNAME="$NVIM_APPNAME" nvim --headless "+Lazy! $lazy_command" "+qa"
+  NVIM_APPNAME="$NVIM_APPNAME" nvim --headless \
+    "+lua local ok, lazy = pcall(require, 'lazy'); if not ok then vim.api.nvim_err_writeln('lazy.nvim is not loaded: ' .. tostring(lazy)); vim.cmd('cquit') end; lazy.$lazy_command({ wait = true, show = false })" \
+    "+qa"
 }
 
 case "$COMMAND" in
