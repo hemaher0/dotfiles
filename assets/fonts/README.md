@@ -11,7 +11,7 @@ The install scripts copy files from this directory only. They do not clone repos
 | `RedHatMono/` | Red Hat Mono |
 | `D2Coding/` | D2CodingLigature Nerd Font |
 
-`D2CodingLigatureNerdFontMono-Regular.ttf` is used as the default Termux font because Termux uses a single terminal font file by default.
+The mono D2Coding font is available for terminal environments that need a monospace Nerd Font.
 
 ## Licenses
 

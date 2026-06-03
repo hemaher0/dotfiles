@@ -11,7 +11,7 @@ Usage: dot <command>
 Commands:
   install [--user]
              Install the complete dotfiles setup
-  update     Pull the repository, apply configuration, update user setup, then check
+  update     Pull the repository, then show component status
   doctor [--fix]
              Check local requirements and optionally repair user setup
   apply      Apply the chezmoi source directory
@@ -34,10 +34,6 @@ log() {
 
 is_wsl() {
   [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease
-}
-
-is_termux() {
-  [ -n "${PREFIX:-}" ] && has_command pkg
 }
 
 resolve_chezmoi() {
@@ -75,7 +71,7 @@ apply_config() {
 }
 
 refresh_user_path() {
-  for path_dir in "$HOME/.local/bin" "$HOME/bin"; do
+  for path_dir in "$HOME/.local/bin" "$HOME/.cargo/bin" "$HOME/bin"; do
     if [ -d "$path_dir" ] && case ":${PATH:-}:" in *":$path_dir:"*) false ;; *) true ;; esac; then
       PATH="$path_dir:${PATH:-}"
       export PATH
@@ -104,11 +100,490 @@ EOF
 
 update_usage() {
   cat <<'EOF'
-Usage: dot update
+Usage:
+  dot update
+  dot update --install <id>
+  dot update --update <id>
+  dot update --build <id>
 
-Pulls the repository, applies the chezmoi source directory, updates user-managed
-components, then checks the setup. It does not install or upgrade OS packages.
+Without options, pulls the repository, then prints a component status table with
+stable IDs. Action options run against the current checkout and then print the
+component status table.
 EOF
+}
+
+status_value() {
+  value=$1
+
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "-"
+  fi
+}
+
+command_version() {
+  component_name=$1
+  command_name=$2
+
+  case "$component_name" in
+    direnv)
+      version_output=$("$command_name" version 2>/dev/null || true)
+      ;;
+    tmux)
+      version_output=$("$command_name" -V 2>/dev/null || true)
+      ;;
+    *)
+      version_output=$("$command_name" --version 2>/dev/null || true)
+      ;;
+  esac
+
+  printf '%s\n' "$version_output" \
+    | sed -n '1{s/^[^0-9]*//;s/[[:space:],].*$//;p;}'
+}
+
+repo_version() {
+  repo_dir=$1
+
+  if ! git -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return
+  fi
+
+  repo_branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  repo_sha=$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null || true)
+
+  if [ -n "$repo_branch" ] && [ -n "$repo_sha" ]; then
+    printf '%s@%s\n' "$repo_branch" "$repo_sha"
+  fi
+}
+
+first_available_command() {
+  commands=$1
+  old_ifs=$IFS
+  IFS=,
+
+  for command_name in $commands; do
+    if has_command "$command_name"; then
+      IFS=$old_ifs
+      printf '%s\n' "$command_name"
+      return 0
+    fi
+  done
+
+  IFS=$old_ifs
+  return 1
+}
+
+font_installed() {
+  font_name=$1
+
+  has_command fc-list && fc-list 2>/dev/null | grep -qi "$font_name"
+}
+
+font_current() {
+  font_name=$1
+
+  if has_command fc-match; then
+    fc_match=$(fc-match "$font_name" 2>/dev/null || true)
+    printf '%s\n' "$fc_match" | sed -n '1{s/:.*$//;p;}'
+  fi
+}
+
+component_registry() {
+  CHEZMOI=$(resolve_chezmoi)
+  antidote_dir="${ANTIDOTE_DIR:-${ZDOTDIR:-$HOME}/.antidote}"
+  antidote_home="${ANTIDOTE_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/antidote}"
+  nvim_lazy_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+
+  cat <<EOF
+repo-dotfiles|dotfiles repo|repo|git|repo|$ROOT_DIR
+package-git|git|system|package|command|git
+package-chezmoi|chezmoi|system|package|command|$CHEZMOI
+package-zsh|zsh|system/user|package/source|command|zsh
+package-tmux|tmux|system/user|package/source|command|tmux
+package-ncurses|ncurses|user|source|ncurses|${USER_PREFIX:-$HOME/.local}
+package-nvim|nvim|system/user|package/prebuilt|command|nvim
+package-rustc|rustc|system/user|package/rustup|command|rustc
+package-cargo|cargo|system/user|package/rustup|command|cargo
+package-downloader|curl or wget|system|package|any-command|curl,wget
+tool-zoxide|zoxide|user|prebuilt|command|zoxide
+tool-direnv|direnv|user|prebuilt|command|direnv
+config-zshrc|managed zshrc|config|chezmoi|file|$HOME/.zshrc
+config-zshenv|managed zshenv|config|chezmoi|file|$HOME/.zshenv
+config-p10k|Powerlevel10k config|config|chezmoi|file|$HOME/.p10k.zsh
+config-nvim|managed Neovim config|config|chezmoi|file|$HOME/.config/nvim/init.lua
+config-wezterm|managed WezTerm config|config|chezmoi|file|$HOME/.config/wezterm/wezterm.lua
+config-tmux|managed tmux config|config|chezmoi|symlink|$HOME/.config/tmux/tmux.conf
+config-tmux-local|managed tmux local config|config|chezmoi|file|$HOME/.config/tmux/tmux.conf.local
+tmux-oh-my|Oh my tmux checkout|tmux config|git|dir|${OH_MY_TMUX_DIR:-$HOME/.local/share/oh-my-tmux}
+zsh-antidote|Antidote|zsh plugin|git|file|$antidote_dir/antidote.zsh
+zsh-manifest|zsh plugin manifest|zsh plugin|chezmoi|file|$HOME/.config/zsh/plugins.txt
+zsh-powerlevel10k|zsh plugin: powerlevel10k|zsh plugin|antidote|dir|$antidote_home/github.com/romkatv/powerlevel10k
+zsh-forgit|zsh plugin: forgit|zsh plugin|antidote|dir|$antidote_home/github.com/wfxr/forgit
+zsh-vi-mode|zsh plugin: zsh-vi-mode|zsh plugin|antidote|dir|$antidote_home/github.com/jeffreytse/zsh-vi-mode
+nvim-lazy|Neovim plugin: lazy.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/lazy.nvim
+nvim-smart-splits|Neovim plugin: smart-splits.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/smart-splits.nvim
+nvim-blink-cmp|Neovim plugin: blink.cmp|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/blink.cmp
+nvim-neo-tree|Neovim plugin: neo-tree.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/neo-tree.nvim
+nvim-treesitter|Neovim plugin: nvim-treesitter|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/nvim-treesitter
+nvim-mason|Neovim plugin: mason.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/mason.nvim
+EOF
+
+  printf '%s\n' "font-red-hat-mono|Red Hat Mono|font|fontconfig|font|Red Hat Mono"
+  printf '%s\n' "font-d2coding-ligature|D2CodingLigature Nerd Font|font|fontconfig|font|D2CodingLigature Nerd Font"
+}
+
+ncurses_current() {
+  user_prefix=$1
+
+  for config_tool in "$user_prefix/bin/ncursesw6-config" "$user_prefix/bin/ncurses6-config"; do
+    if [ -x "$config_tool" ]; then
+      "$config_tool" --version 2>/dev/null || true
+      return
+    fi
+  done
+
+  for lib_dir in "$user_prefix/lib" "$user_prefix/lib64"; do
+    for lib_name in libncursesw.so libncursesw.a libncurses.so libncurses.a; do
+      if [ -r "$lib_dir/$lib_name" ]; then
+        printf '%s\n' "present"
+        return
+      fi
+    done
+  done
+}
+
+component_status_row() {
+  status=$1
+  component_id=$2
+  component_name=$3
+  scope=$4
+  method=$5
+  current=$6
+  action=$7
+
+  printf '%-8s %-26s %-34s %-12s %-16s %-16s %s\n' \
+    "$status" "$component_id" "$component_name" "$scope" "$method" "$(status_value "$current")" "$action"
+}
+
+component_status_table() {
+  printf '%-8s %-26s %-34s %-12s %-16s %-16s %s\n' \
+    "STATUS" "ID" "COMPONENT" "SCOPE" "METHOD" "CURRENT" "ACTION"
+  printf '%-8s %-26s %-34s %-12s %-16s %-16s %s\n' \
+    "------" "--" "---------" "-----" "------" "-------" "------"
+
+  component_registry | while IFS='|' read -r component_id component_name scope method kind target; do
+    status=missing
+    current=
+    next_action="bin/dot update --install $component_id"
+
+    case "$kind" in
+      repo)
+        if current=$(repo_version "$target"); then
+          status=ok
+          next_action=-
+        fi
+        ;;
+      ncurses)
+        current=$(ncurses_current "$target")
+        if [ -n "$current" ]; then
+          status=ok
+          next_action=-
+        fi
+        ;;
+      command)
+        if has_command "$target"; then
+          status=ok
+          current=$(command_version "$component_name" "$target")
+          next_action=-
+        fi
+        ;;
+      any-command)
+        if command_name=$(first_available_command "$target"); then
+          status=ok
+          current=$command_name
+          next_action=-
+        fi
+        ;;
+      file)
+        if [ -r "$target" ]; then
+          status=ok
+          current=present
+          next_action=-
+        fi
+        ;;
+      symlink)
+        if [ -L "$target" ] && [ -r "$target" ]; then
+          status=ok
+          current=present
+          next_action=-
+        elif [ -L "$target" ]; then
+          current=target-missing
+          case "$component_id" in
+            config-tmux)
+              next_action="bin/dot update --install tmux-oh-my"
+              ;;
+          esac
+        fi
+        ;;
+      dir)
+        if [ -d "$target" ]; then
+          status=ok
+          current=present
+          next_action=-
+        fi
+        ;;
+      font)
+        if ! has_command fc-list; then
+          status=unknown
+          next_action="bin/dot install"
+        elif font_installed "$target"; then
+          status=ok
+          current=$(font_current "$target")
+          next_action=-
+        fi
+        ;;
+    esac
+
+    component_status_row "$status" "$component_id" "$component_name" "$scope" "$method" "$current" "$next_action"
+  done
+}
+
+component_row() {
+  component_id=$1
+
+  component_registry | awk -F '|' -v component_id="$component_id" '
+    $1 == component_id {
+      print
+      found = 1
+      exit
+    }
+    END {
+      exit found ? 0 : 1
+    }
+  '
+}
+
+list_component_ids() {
+  component_registry | sed 's/|.*//'
+}
+
+require_component_id() {
+  component_id=$1
+
+  if component_row "$component_id" >/dev/null; then
+    return 0
+  fi
+
+  log "unknown component id: $component_id"
+  log "known component ids:"
+  list_component_ids | sed 's/^/  /'
+  return 1
+}
+
+pull_repository() {
+  if ! has_command git; then
+    log "git is required for update"
+    exit 1
+  fi
+
+  log "updating repository"
+  git -C "$ROOT_DIR" pull --ff-only
+}
+
+run_user_package_component() {
+  component_name=$1
+
+  run_packages "user-$component_name"
+}
+
+run_forced_user_package_component() {
+  component_name=$1
+  old_force=${DOTFILES_FORCE_USER_INSTALL:-}
+
+  DOTFILES_FORCE_USER_INSTALL=1
+  export DOTFILES_FORCE_USER_INSTALL
+  run_user_package_component "$component_name"
+
+  if [ -n "$old_force" ]; then
+    DOTFILES_FORCE_USER_INSTALL=$old_force
+    export DOTFILES_FORCE_USER_INSTALL
+  else
+    unset DOTFILES_FORCE_USER_INSTALL
+  fi
+}
+
+unsupported_component_action() {
+  action_name=$1
+  component_id=$2
+
+  log "$action_name is not supported for component: $component_id"
+  return 1
+}
+
+install_component() {
+  component_id=$1
+
+  case "$component_id" in
+    repo-dotfiles)
+      pull_repository
+      ;;
+    package-git|package-downloader)
+      run_packages install
+      ;;
+    package-chezmoi)
+      run_user_package_component chezmoi
+      ;;
+    package-zsh)
+      run_user_package_component zsh
+      ;;
+    package-tmux)
+      run_user_package_component tmux
+      ;;
+    package-ncurses)
+      run_user_package_component ncurses
+      ;;
+    package-nvim)
+      run_user_package_component nvim
+      ;;
+    package-rustc|package-cargo)
+      run_user_package_component rust
+      ;;
+    tool-zoxide)
+      run_tools install zoxide
+      refresh_user_path
+      ;;
+    tool-direnv)
+      run_tools install direnv
+      refresh_user_path
+      ;;
+    config-*|zsh-manifest)
+      apply_config
+      refresh_user_path
+      ;;
+    tmux-oh-my)
+      install_tmux_setup
+      apply_config
+      refresh_user_path
+      ;;
+    font-*)
+      run_fonts install
+      ;;
+    zsh-*)
+      install_zsh_setup
+      ;;
+    nvim-*)
+      install_nvim_setup
+      ;;
+    *)
+      unsupported_component_action install "$component_id"
+      ;;
+  esac
+}
+
+update_component() {
+  component_id=$1
+
+  case "$component_id" in
+    repo-dotfiles)
+      pull_repository
+      ;;
+    package-git|package-downloader)
+      run_packages upgrade
+      ;;
+    package-chezmoi)
+      run_user_package_component chezmoi
+      ;;
+    package-zsh)
+      run_forced_user_package_component zsh
+      ;;
+    package-tmux)
+      run_forced_user_package_component tmux
+      ;;
+    package-ncurses)
+      run_forced_user_package_component ncurses
+      ;;
+    package-nvim)
+      run_forced_user_package_component nvim
+      ;;
+    package-rustc|package-cargo)
+      run_user_package_component rust
+      ;;
+    tool-zoxide)
+      run_tools update zoxide
+      refresh_user_path
+      ;;
+    tool-direnv)
+      run_tools update direnv
+      refresh_user_path
+      ;;
+    config-*|zsh-manifest)
+      apply_config
+      refresh_user_path
+      ;;
+    font-*)
+      run_fonts update
+      ;;
+    tmux-oh-my)
+      update_tmux_setup
+      ;;
+    zsh-*)
+      update_zsh_setup
+      ;;
+    nvim-*)
+      update_nvim_setup
+      ;;
+    *)
+      unsupported_component_action update "$component_id"
+      ;;
+  esac
+}
+
+build_component() {
+  component_id=$1
+
+  case "$component_id" in
+    package-zsh)
+      run_forced_user_package_component zsh
+      ;;
+    package-ncurses)
+      run_forced_user_package_component ncurses
+      ;;
+    package-tmux)
+      run_forced_user_package_component tmux
+      ;;
+    *)
+      unsupported_component_action build "$component_id"
+      ;;
+  esac
+}
+
+run_component_action() {
+  action_name=$1
+  component_id=$2
+
+  require_component_id "$component_id"
+
+  log "$action_name component: $component_id"
+  case "$action_name" in
+    install)
+      install_component "$component_id"
+      ;;
+    update)
+      update_component "$component_id"
+      ;;
+    build)
+      build_component "$component_id"
+      ;;
+    *)
+      log "unknown update action: $action_name"
+      return 1
+      ;;
+  esac
+
+  refresh_user_path
+  log "component status"
+  component_status_table
 }
 
 mark_missing() {
@@ -161,11 +636,7 @@ check_user_tool_status() {
     need_apply=1
   else
     mark_missing "command $command_name"
-    if is_termux; then
-      need_packages=1
-    else
-      need_tools=1
-    fi
+    need_tools=1
   fi
 }
 
@@ -181,16 +652,6 @@ check_fontconfig_font() {
 }
 
 check_fonts_status() {
-  if is_termux; then
-    if [ -r "$HOME/.termux/font.ttf" ]; then
-      log "ok: Termux font file"
-    else
-      mark_missing "Termux font file"
-      need_fonts=1
-    fi
-    return
-  fi
-
   if has_command fc-list; then
     check_fontconfig_font "Red Hat Mono"
     check_fontconfig_font "D2CodingLigature Nerd Font"
@@ -258,6 +719,33 @@ check_nvim_plugins_status() {
   done
 }
 
+check_tmux_status() {
+  oh_my_tmux_dir="${OH_MY_TMUX_DIR:-$HOME/.local/share/oh-my-tmux}"
+
+  if has_command tmux; then
+    log "ok: command tmux"
+  else
+    mark_missing "command tmux"
+    need_tmux=1
+  fi
+
+  if [ -d "$oh_my_tmux_dir/.git" ]; then
+    log "ok: Oh my tmux checkout"
+  else
+    mark_missing "Oh my tmux checkout"
+    need_tmux=1
+  fi
+
+  if [ -L "$HOME/.config/tmux/tmux.conf" ] && [ -r "$HOME/.config/tmux/tmux.conf" ]; then
+    log "ok: managed tmux config"
+  else
+    mark_missing "managed tmux config"
+    need_apply=1
+  fi
+
+  check_file_status "$HOME/.config/tmux/tmux.conf.local" "managed tmux local config"
+}
+
 check_wezterm_status() {
   if ! has_command wezterm; then
     mark_warning "wezterm command is not installed in this environment"
@@ -285,6 +773,7 @@ doctor_check() {
   need_fonts=0
   need_nvim_plugins=0
   need_packages=0
+  need_tmux=0
   need_tools=0
   need_zsh_plugins=0
 
@@ -295,6 +784,8 @@ doctor_check() {
   check_command_status "$CHEZMOI" packages
   check_command_status zsh packages
   check_command_status nvim packages
+  check_command_status rustc packages
+  check_command_status cargo packages
 
   if has_command curl || has_command wget; then
     log "ok: curl or wget"
@@ -317,6 +808,7 @@ doctor_check() {
 
   check_user_tool_status zoxide
   check_user_tool_status direnv
+  check_tmux_status
   check_zsh_plugins_status
   check_nvim_plugins_status
   check_wezterm_status
@@ -353,6 +845,11 @@ doctor_fix() {
     else
       mark_warning "skipping user-local tools because curl or wget is unavailable"
     fi
+  fi
+
+  if [ "$need_tmux" -eq 1 ]; then
+    log "fix: installing Oh my tmux"
+    install_tmux_setup
   fi
 
   if [ "$need_zsh_plugins" -eq 1 ]; then
@@ -397,9 +894,7 @@ doctor() {
 }
 
 run_packages() {
-  if [ -n "${PREFIX:-}" ] && has_command pkg; then
-    "$ROOT_DIR/packages/termux.sh" "$@"
-  elif [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease; then
+  if [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease; then
     "$ROOT_DIR/packages/wsl.sh" "$@"
   elif [ "$(uname -s)" = "Linux" ]; then
     "$ROOT_DIR/packages/ubuntu.sh" "$@"
@@ -410,11 +905,7 @@ run_packages() {
 }
 
 run_user_packages() {
-  if is_termux; then
-    run_packages install
-  else
-    run_packages user
-  fi
+  run_packages user
 }
 
 run_zsh_plugins() {
@@ -422,7 +913,7 @@ run_zsh_plugins() {
 }
 
 run_fonts() {
-  if [ "$(uname -s)" = "Linux" ] || [ -n "${PREFIX:-}" ]; then
+  if [ "$(uname -s)" = "Linux" ]; then
     "$ROOT_DIR/scripts/install-fonts.sh" "$@"
   else
     log "no font script is available for this platform"
@@ -438,16 +929,37 @@ run_nvim() {
   "$ROOT_DIR/scripts/install-neovim-plugins.sh" "$@"
 }
 
+run_tmux() {
+  "$ROOT_DIR/scripts/install-tmux-config.sh" "$@"
+}
+
 run_user_tools_if_needed() {
   command_name=$1
 
-  if is_termux; then
-    log "skipping user-local tools; Termux packages manage zoxide and direnv"
+  run_tools "$command_name"
+  refresh_user_path
+}
+
+install_tmux_setup() {
+  if ! has_command tmux; then
+    run_user_package_component tmux
+    refresh_user_path
+  fi
+
+  if has_command git; then
+    run_tmux install
+  else
+    mark_warning "skipping Oh my tmux install because git is unavailable"
+  fi
+}
+
+update_tmux_setup() {
+  if ! has_command git; then
+    mark_warning "skipping Oh my tmux update because git is unavailable"
     return
   fi
 
-  run_tools "$command_name"
-  refresh_user_path
+  run_tmux update
 }
 
 install_zsh_setup() {
@@ -534,6 +1046,9 @@ install_setup() {
     run_user_tools_if_needed install
   fi
 
+  log "installing Oh my tmux"
+  install_tmux_setup
+
   log "installing zsh plugins"
   install_zsh_setup
 
@@ -545,8 +1060,53 @@ install_setup() {
 }
 
 update_repo() {
+  update_action=status
+  update_component_id=
+
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --install|install)
+        if [ "$update_action" != "status" ]; then
+          update_usage
+          return 1
+        fi
+        if [ -z "${2:-}" ]; then
+          log "$1 requires a component id"
+          update_usage
+          return 1
+        fi
+        update_action=install
+        update_component_id=$2
+        shift
+        ;;
+      --update|update)
+        if [ "$update_action" != "status" ]; then
+          update_usage
+          return 1
+        fi
+        if [ -z "${2:-}" ]; then
+          log "$1 requires a component id"
+          update_usage
+          return 1
+        fi
+        update_action=update
+        update_component_id=$2
+        shift
+        ;;
+      --build|build)
+        if [ "$update_action" != "status" ]; then
+          update_usage
+          return 1
+        fi
+        if [ -z "${2:-}" ]; then
+          log "$1 requires a component id"
+          update_usage
+          return 1
+        fi
+        update_action=build
+        update_component_id=$2
+        shift
+        ;;
       help|-h|--help)
         update_usage
         return 0
@@ -559,31 +1119,16 @@ update_repo() {
     shift
   done
 
-  if ! has_command git; then
-    log "git is required for update"
-    exit 1
+  if [ "$update_action" != "status" ]; then
+    run_component_action "$update_action" "$update_component_id"
+    return
   fi
 
-  log "updating repository"
-  git -C "$ROOT_DIR" pull --ff-only
+  pull_repository
+  refresh_user_path
 
-  log "applying configuration"
-  apply_config
-
-  log "updating bundled fonts"
-  run_fonts update
-
-  log "updating user-local tools"
-  run_user_tools_if_needed update
-
-  log "updating zsh plugins"
-  update_zsh_setup
-
-  log "updating Neovim plugins"
-  update_nvim_setup
-
-  log "checking setup"
-  doctor
+  log "component status"
+  component_status_table
 }
 
 command_name="${1:-help}"

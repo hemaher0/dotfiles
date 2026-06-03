@@ -4,7 +4,6 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 FONT_SOURCE_DIR="${FONT_SOURCE_DIR:-$ROOT_DIR/assets/fonts}"
 FONT_DIR="${FONT_DIR:-$HOME/.local/share/fonts/dotfiles}"
-TERMUX_FONT_FILE="${TERMUX_FONT_FILE:-$HOME/.termux/font.ttf}"
 
 usage() {
   cat <<'EOF'
@@ -66,10 +65,6 @@ is_wsl() {
   [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease
 }
 
-is_termux() {
-  [ -n "${PREFIX:-}" ] && has_command pkg
-}
-
 install_windows_fonts_from_wsl() {
   command_name=$1
 
@@ -82,32 +77,6 @@ install_windows_fonts_from_wsl() {
   ps_script=$(wslpath -w "$ROOT_DIR/scripts/install-fonts.ps1")
   log "installing Windows fonts through PowerShell: $ps_script"
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_script" "$command_name"
-}
-
-install_termux_font() {
-  require_font_source
-
-  font_file="$FONT_SOURCE_DIR/D2Coding/D2CodingLigatureNerdFontMono-Regular.ttf"
-  if [ ! -r "$font_file" ]; then
-    font_file="$FONT_SOURCE_DIR/D2Coding/D2CodingLigatureNerdFont-Regular.ttf"
-  fi
-
-  if [ ! -r "$font_file" ]; then
-    log "could not find a Termux font in $FONT_SOURCE_DIR/D2Coding"
-    exit 1
-  fi
-
-  mkdir -p "$(dirname "$TERMUX_FONT_FILE")"
-  cp -f "$font_file" "$TERMUX_FONT_FILE"
-
-  if has_command termux-reload-settings; then
-    termux-reload-settings
-  else
-    log "termux-reload-settings was not found; restart Termux if the font does not appear"
-  fi
-
-  log "installed Termux font: $TERMUX_FONT_FILE"
-  log "Termux supports a single terminal font file; D2CodingLigature Nerd Font Mono is used for icon coverage"
 }
 
 install_linux_fonts() {
@@ -136,8 +105,6 @@ case "$command_name" in
       if [ "$installed_windows_fonts" -eq 0 ] && [ "$installed_linux_fonts" -eq 0 ]; then
         exit 1
       fi
-    elif is_termux; then
-      install_termux_font
     else
       install_linux_fonts
     fi

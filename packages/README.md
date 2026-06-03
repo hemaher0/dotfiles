@@ -8,7 +8,6 @@ These scripts are implementation details for the package setup used by `bin/dot 
 | --- | --- |
 | `ubuntu.sh` | Ubuntu and Ubuntu-like Linux environments with `apt-get`. |
 | `wsl.sh` | Ubuntu on WSL. Delegates to `ubuntu.sh` after verifying WSL. |
-| `termux.sh` | Termux on Android. |
 | `windows.ps1` | Windows with `winget`. |
 
 ## Usage
@@ -20,8 +19,9 @@ packages/ubuntu.sh install
 packages/ubuntu.sh update
 packages/ubuntu.sh upgrade
 packages/ubuntu.sh user
+packages/ubuntu.sh user-zsh
+packages/ubuntu.sh user-tmux
 packages/wsl.sh install
-packages/termux.sh install
 ```
 
 Run the Windows script:
@@ -34,6 +34,6 @@ Run the Windows script:
 
 `update` refreshes package indexes or sources. `upgrade` is limited to the baseline packages managed by this repository; it does not run full-system upgrade commands such as `apt upgrade`, `pkg upgrade`, or `winget upgrade --all`.
 
-On Ubuntu, `user` installs supported components into `~/.local`, uses prebuilt zoxide, direnv, Neovim releases, and zsh stable release tarballs. It is used by `bin/dot install --user`. zsh requires compiler prerequisites such as `make`, `xz`, and a C compiler. It does not clone or build from the SourceForge Git development repository, and it does not change the login shell. Set `DOTFILES_FORCE_USER_INSTALL=1` to reinstall even when commands already exist.
+On Ubuntu, `install` uses `apt` packages for Rust, ncurses, libevent, and tmux. `user` installs supported components into `~/.local`, uses prebuilt zoxide, direnv, Neovim releases, rustup toolchains, ncurses/libevent/tmux/zsh stable release tarballs, and the Oh my tmux checkout. It is used by `bin/dot install --user`. Targeted `user-*` commands are internal entry points for component actions. Source builds still require compiler prerequisites such as `make`, `pkg-config`, `xz`, a C compiler, and `yacc` or `bison` for tmux. zsh does not clone or build from the SourceForge Git development repository, and the install flow does not change the login shell. Set `DOTFILES_FORCE_USER_INSTALL=1` to reinstall even when commands already exist.
 
 Review each script before running it on a new machine. Package names and availability can vary by OS version.

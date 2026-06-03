@@ -1,0 +1,11 @@
+# Local overrides for Oh my tmux.
+# The main tmux.conf is managed as a symlink to the Oh my tmux checkout.
+
+tmux_conf_preserve_stock_bindings=false
+tmux_conf_new_pane_retain_current_path=true
+tmux_conf_24b_colour=auto
+tmux_conf_theme=enabled
+tmux_conf_copy_to_os_clipboard=true
+
+# Keep the status line compact and ASCII-safe by default.
+tmux_conf_theme_status_right='#{prefix}#{pairing}#{synchronized} , %R , %d %b | #{username}#{root} | #{hostname} '

@@ -67,6 +67,7 @@ $Packages = @(
     @{ Id = "sharkdp.fd"; Name = "fd" },
     @{ Id = "junegunn.fzf"; Name = "fzf" },
     @{ Id = "eza-community.eza"; Name = "eza" },
+    @{ Id = "Rustlang.Rustup"; Name = "Rustup" },
     @{ Id = "Microsoft.PowerShell"; Name = "PowerShell" }
 )
 

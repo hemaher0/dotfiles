@@ -32,7 +32,7 @@ On Windows:
 .\scripts\install-fonts.ps1
 ```
 
-The font scripts install bundled files from `assets/fonts` and do not download anything. Linux installs fonts into `~/.local/share/fonts/dotfiles` and refreshes `fontconfig`. WSL installs Windows fonts through PowerShell when possible, and also installs Linux fontconfig fonts when a local WSL `wezterm` binary is present. Termux installs `D2CodingLigatureNerdFontMono-Regular.ttf` as `~/.termux/font.ttf` because Termux uses a single terminal font file by default.
+The font scripts install bundled files from `assets/fonts` and do not download anything. Linux installs fonts into `~/.local/share/fonts/dotfiles` and refreshes `fontconfig`. WSL installs Windows fonts through PowerShell when possible, and also installs Linux fontconfig fonts when a local WSL `wezterm` binary is present.
 
 ## User Tools
 
@@ -40,9 +40,20 @@ Install or update prebuilt user-local CLI tools:
 
 ```sh
 scripts/install-user-tools.sh
+scripts/install-user-tools.sh install zoxide
+scripts/install-user-tools.sh update direnv
 ```
 
 This installs `zoxide` and `direnv` from official release binaries into `~/.local/bin`. Windows uses winget package IDs for the same tools.
+
+## tmux
+
+Install or update the Oh my tmux checkout used by the managed tmux config:
+
+```sh
+scripts/install-tmux-config.sh
+scripts/install-tmux-config.sh update
+```
 
 ## Neovim
 

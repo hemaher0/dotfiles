@@ -271,6 +271,8 @@ function Invoke-DoctorCheck {
     Test-CommandStatus -Name $script:Chezmoi -InstallGroup "packages" -Label "chezmoi"
     Test-CommandStatus -Name "pwsh" -InstallGroup "packages"
     Test-CommandStatus -Name "nvim" -InstallGroup "packages"
+    Test-CommandStatus -Name "rustc" -InstallGroup "packages"
+    Test-CommandStatus -Name "cargo" -InstallGroup "packages"
     Test-CommandStatus -Name "zoxide" -InstallGroup "tools"
     Test-CommandStatus -Name "direnv" -InstallGroup "tools"
 

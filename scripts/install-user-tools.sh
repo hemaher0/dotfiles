@@ -7,7 +7,7 @@ DIRENV_VERSION="${DIRENV_VERSION:-2.37.1}"
 
 usage() {
   cat <<'EOF'
-Usage: install-user-tools.sh [install|update|help]
+Usage: install-user-tools.sh [install|update] [all|zoxide|direnv]
 
 Installs prebuilt user-local CLI tools into ${BIN_DIR:-$HOME/.local/bin}:
   - zoxide
@@ -99,11 +99,30 @@ install_direnv() {
 }
 
 command_name="${1:-install}"
+tool_name="${2:-all}"
+
+install_tools() {
+  case "$tool_name" in
+    all)
+      install_zoxide
+      install_direnv
+      ;;
+    zoxide)
+      install_zoxide
+      ;;
+    direnv)
+      install_direnv
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
 
 case "$command_name" in
   install|update)
-    install_zoxide
-    install_direnv
+    install_tools
     log "installed user-local tools into $BIN_DIR"
     ;;
   help|-h|--help)
