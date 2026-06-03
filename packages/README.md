@@ -17,6 +17,8 @@ Run the detected POSIX script:
 
 ```sh
 bin/dot packages
+bin/dot packages update
+bin/dot packages upgrade
 ```
 
 Run a specific POSIX script:
@@ -31,6 +33,10 @@ Run the Windows script:
 
 ```powershell
 .\packages\windows.ps1
+.\packages\windows.ps1 update
+.\packages\windows.ps1 upgrade
 ```
+
+`update` refreshes package indexes or sources. `upgrade` is limited to the baseline packages managed by this repository; it does not run full-system upgrade commands such as `apt upgrade`, `pkg upgrade`, or `winget upgrade --all`.
 
 Review each script before running it on a new machine. Package names and availability can vary by OS version.

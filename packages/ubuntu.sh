@@ -1,6 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PACKAGES=(
+  bat
+  build-essential
+  ca-certificates
+  cmake
+  curl
+  fd-find
+  fontconfig
+  fzf
+  git
+  less
+  make
+  neovim
+  openssh-client
+  pkg-config
+  python3
+  python3-pip
+  python3-venv
+  ripgrep
+  tar
+  unzip
+  wget
+  xz-utils
+  zsh
+)
+
+usage() {
+  cat <<'EOF'
+Usage: ubuntu.sh [install|update|upgrade|help]
+
+Commands:
+  install  Update the apt index and install baseline packages
+  update   Update the apt package index
+  upgrade  Upgrade installed baseline packages only
+EOF
+}
+
 log() {
   printf '%s\n' "dotfiles: $*"
 }
@@ -20,6 +57,18 @@ as_root() {
   fi
 }
 
+require_apt() {
+  if ! has_command apt-get; then
+    log "apt-get is required for this script"
+    exit 1
+  fi
+}
+
+update_package_index() {
+  log "updating apt package index"
+  as_root apt-get update
+}
+
 install_chezmoi() {
   if has_command chezmoi || [ -x "$HOME/.local/bin/chezmoi" ]; then
     log "chezmoi is already installed"
@@ -30,40 +79,45 @@ install_chezmoi() {
   sh -c "$(curl -fsLS https://get.chezmoi.io)" -- -b "$HOME/.local/bin"
 }
 
-if ! has_command apt-get; then
-  log "apt-get is required for this script"
-  exit 1
+install_packages() {
+  update_package_index
+
+  log "installing Ubuntu packages"
+  as_root apt-get install -y "${PACKAGES[@]}"
+
+  install_chezmoi
+  log "Ubuntu package setup complete"
+}
+
+upgrade_packages() {
+  update_package_index
+
+  log "upgrading installed Ubuntu baseline packages"
+  as_root apt-get install -y --only-upgrade "${PACKAGES[@]}"
+}
+
+command_name="${1:-install}"
+
+if [ "$command_name" = "help" ] || [ "$command_name" = "-h" ] || [ "$command_name" = "--help" ]; then
+  usage
+  exit 0
 fi
 
-log "updating apt package index"
-as_root apt-get update
-
-log "installing Ubuntu packages"
-as_root apt-get install -y \
-  bat \
-  build-essential \
-  ca-certificates \
-  cmake \
-  curl \
-  fd-find \
-  fontconfig \
-  fzf \
-  git \
-  less \
-  make \
-  neovim \
-  openssh-client \
-  pkg-config \
-  python3 \
-  python3-pip \
-  python3-venv \
-  ripgrep \
-  tar \
-  unzip \
-  wget \
-  xz-utils \
-  zsh
-
-install_chezmoi
-
-log "Ubuntu package setup complete"
+case "$command_name" in
+  install)
+    require_apt
+    install_packages
+    ;;
+  update)
+    require_apt
+    update_package_index
+    ;;
+  upgrade)
+    require_apt
+    upgrade_packages
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

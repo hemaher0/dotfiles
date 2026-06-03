@@ -17,7 +17,7 @@ Commands:
   zsh-plugins  Install or update Antidote-managed zsh plugins
   nvim       Install or update Neovim plugins
   doctor [--fix]  Check local requirements and optionally install missing setup
-  update     Update the repository, then apply configuration
+  update     Pull the repository, apply configuration, then repair missing setup
   help       Show this help
 EOF
 }
@@ -421,8 +421,14 @@ update_repo() {
     exit 1
   fi
 
+  log "updating repository"
   git -C "$ROOT_DIR" pull --ff-only
+
+  log "applying configuration"
   apply_config
+
+  log "checking repaired setup"
+  doctor --fix
 }
 
 command_name="${1:-help}"

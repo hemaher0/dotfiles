@@ -84,6 +84,12 @@ Check only:
 
 Windows bootstrap covers winget packages, chezmoi-managed files, bundled fonts, user tools, Neovim plugins, and WezTerm readiness. It does not configure zsh on Windows.
 
+Update the repository and reapply the Windows setup:
+
+```powershell
+.\update.ps1
+```
+
 ## Commands
 
 ```sh
@@ -91,6 +97,8 @@ bin/dot doctor
 bin/dot doctor --fix
 bin/dot apply
 bin/dot packages
+bin/dot packages update
+bin/dot packages upgrade
 bin/dot fonts
 bin/dot tools
 bin/dot zsh-plugins

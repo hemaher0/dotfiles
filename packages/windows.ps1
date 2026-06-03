@@ -1,3 +1,8 @@
+param(
+    [ValidateSet("install", "update", "upgrade", "help")]
+    [string]$Command = "install"
+)
+
 $ErrorActionPreference = "Stop"
 
 function Write-DotfilesLog {
@@ -5,9 +10,27 @@ function Write-DotfilesLog {
     Write-Host "dotfiles: $Message"
 }
 
+function Show-Usage {
+    @"
+Usage: windows.ps1 [install|update|upgrade|help]
+
+Commands:
+  install  Install baseline packages with winget
+  update   Update winget sources
+  upgrade  Upgrade managed baseline packages only
+"@
+}
+
 function Test-Command {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Assert-Winget {
+    if (-not (Test-Command "winget")) {
+        Write-DotfilesLog "winget is required for this script"
+        exit 1
+    }
 }
 
 function Install-WingetPackage {
@@ -20,9 +43,19 @@ function Install-WingetPackage {
     winget install --id $Id --exact --accept-package-agreements --accept-source-agreements
 }
 
-if (-not (Test-Command "winget")) {
-    Write-DotfilesLog "winget is required for this script"
-    exit 1
+function Upgrade-WingetPackage {
+    param(
+        [string]$Id,
+        [string]$Name
+    )
+
+    Write-DotfilesLog "upgrading $Name"
+    winget upgrade --id $Id --exact --accept-package-agreements --accept-source-agreements
+}
+
+function Update-WingetSources {
+    Write-DotfilesLog "updating winget sources"
+    winget source update
 }
 
 $Packages = @(
@@ -37,8 +70,28 @@ $Packages = @(
     @{ Id = "Microsoft.PowerShell"; Name = "PowerShell" }
 )
 
-foreach ($Package in $Packages) {
-    Install-WingetPackage -Id $Package.Id -Name $Package.Name
+if ($Command -eq "help") {
+    Show-Usage
+    exit 0
 }
 
-Write-DotfilesLog "Windows package setup complete"
+Assert-Winget
+
+switch ($Command) {
+    "install" {
+        foreach ($Package in $Packages) {
+            Install-WingetPackage -Id $Package.Id -Name $Package.Name
+        }
+        Write-DotfilesLog "Windows package setup complete"
+    }
+    "update" {
+        Update-WingetSources
+    }
+    "upgrade" {
+        Update-WingetSources
+        foreach ($Package in $Packages) {
+            Upgrade-WingetPackage -Id $Package.Id -Name $Package.Name
+        }
+        Write-DotfilesLog "Windows managed package upgrade complete"
+    }
+}
