@@ -70,7 +70,7 @@ bin/dot install --user
 bin/dot doctor
 ```
 
-This installs supported components into `~/.local`, uses prebuilt zoxide, direnv, and Neovim releases, and installs missing zsh from source. zsh requires compiler prerequisites such as `make`, `xz`, and a C compiler. It does not change the login shell.
+This installs supported components into `~/.local`, uses prebuilt zoxide, direnv, Neovim releases, and zsh stable release tarballs. zsh requires compiler prerequisites such as `make`, `xz`, and a C compiler. It does not change the login shell.
 
 ## Commands
 

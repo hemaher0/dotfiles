@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 USER_PREFIX="${USER_PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-$USER_PREFIX/bin}"
 OPT_DIR="${OPT_DIR:-$USER_PREFIX/opt}"
-ZSH_VERSION="${ZSH_VERSION:-5.9}"
+ZSH_VERSION="${ZSH_VERSION:-5.9.1}"
 NEOVIM_VERSION="${NEOVIM_VERSION:-latest}"
 
 case ":${PATH:-}:" in
@@ -78,6 +78,33 @@ download() {
     log "curl or wget is required for downloads"
     exit 1
   fi
+}
+
+download_first() {
+  output=$1
+  shift
+
+  if ! has_command curl && ! has_command wget; then
+    log "curl or wget is required for downloads"
+    exit 1
+  fi
+
+  for url in "$@"; do
+    log "downloading $url"
+
+    if has_command curl; then
+      if curl -fL "$url" -o "$output"; then
+        return 0
+      fi
+    elif wget -O "$output" "$url"; then
+      return 0
+    fi
+
+    rm -f "$output"
+  done
+
+  log "all download URLs failed"
+  exit 1
 }
 
 as_root() {
@@ -155,18 +182,18 @@ has_c_compiler() {
   has_command cc || has_command gcc || has_command clang
 }
 
-require_source_commands() {
+require_compile_commands() {
   missing=0
 
   for command_name in "$@"; do
     if ! has_command "$command_name"; then
-      log "$command_name is required for source installs"
+      log "$command_name is required to compile zsh"
       missing=1
     fi
   done
 
   if ! has_c_compiler; then
-    log "a C compiler is required for source installs"
+    log "a C compiler is required to compile zsh"
     missing=1
   fi
 
@@ -190,22 +217,26 @@ install_user_tools() {
   BIN_DIR="$BIN_DIR" "$ROOT_DIR/scripts/install-user-tools.sh" install
 }
 
-install_zsh_from_source() {
+install_zsh_release() {
   if ! should_install_command zsh; then
     log "zsh is already available"
     return
   fi
 
-  require_source_commands make tar xz
+  require_compile_commands make tar xz
 
   tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-zsh.XXXXXX")
   archive="$tmp_dir/zsh-$ZSH_VERSION.tar.xz"
-  url="https://www.zsh.org/pub/zsh-$ZSH_VERSION.tar.xz"
+  urls=(
+    "https://www.zsh.org/pub/zsh-$ZSH_VERSION.tar.xz"
+    "https://www.zsh.org/pub/old/zsh-$ZSH_VERSION.tar.xz"
+    "https://sourceforge.net/projects/zsh/files/zsh/$ZSH_VERSION/zsh-$ZSH_VERSION.tar.xz/download"
+  )
 
-  log "installing zsh $ZSH_VERSION from source into $USER_PREFIX"
+  log "installing zsh $ZSH_VERSION stable release into $USER_PREFIX"
   (
     trap 'rm -rf "$tmp_dir"' EXIT
-    download "$url" "$archive"
+    download_first "$archive" "${urls[@]}"
     tar -xJf "$archive" -C "$tmp_dir"
     cd "$tmp_dir/zsh-$ZSH_VERSION"
     ./configure --prefix="$USER_PREFIX"
@@ -271,7 +302,7 @@ install_user_setup() {
 
   install_chezmoi
   install_user_tools
-  install_zsh_from_source
+  install_zsh_release
   install_neovim_binary
 
   log "Ubuntu user-local setup complete"
