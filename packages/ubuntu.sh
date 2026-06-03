@@ -73,6 +73,7 @@ Commands:
   user-chezmoi   Install chezmoi into the user profile
   user-rust      Install Rust with rustup into the user profile
   user-tools     Install user-local prebuilt tools
+  user-libevent  Build libevent into the user profile
   user-ncurses   Build ncurses into the user profile
   user-tmux      Build tmux into the user profile
   user-zsh       Build zsh into the user profile
@@ -557,6 +558,10 @@ case "$command_name" in
   user-ncurses)
     mkdir -p "$BIN_DIR" "$OPT_DIR"
     install_ncurses_release
+    ;;
+  user-libevent)
+    mkdir -p "$BIN_DIR" "$OPT_DIR"
+    install_libevent_release
     ;;
   user-tmux)
     mkdir -p "$BIN_DIR" "$OPT_DIR"

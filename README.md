@@ -79,18 +79,22 @@ This installs supported components into `~/.local`, uses prebuilt zoxide, direnv
 bin/dot install
 bin/dot install --user
 bin/dot update
+bin/dot tui
+bin/dot update --raw
+bin/dot update --sync config-tmux
 bin/dot update --install tool-zoxide
-bin/dot update --update nvim-lazy
+bin/dot update --install plugin-nvim
+bin/dot update --update plugin-zsh
 bin/dot update --build package-zsh
 bin/dot update --build package-tmux
-bin/dot update --install tmux-oh-my
+bin/dot update --install plugin-tmux
 bin/dot doctor
 bin/dot doctor --fix
 bin/dot sync
 bin/dot bootstrap
 ```
 
-`bin/dot install` performs the complete setup and may use sudo for platform packages. `bin/dot install --user` uses the user-local strategy without sudo. `bin/dot update` pulls the repository and prints a component status table with stable component IDs. Use `bin/dot update --install <id>`, `--update <id>`, or `--build <id>` to run a single component action explicitly. `bin/dot sync` only syncs the chezmoi source directory, `home/`, into `$HOME`.
+`bin/dot install` performs the complete setup and may use sudo for platform packages. `bin/dot install --user` uses the user-local strategy without sudo. `bin/dot update` pulls the repository and prints a component status table with category, group, scope, and stable component IDs. `bin/dot update --check` prints the same table without pulling, and `bin/dot update --raw` prints machine-readable status rows for tooling. `bin/dot tui` opens the Ratatui component dashboard, building it locally with Cargo when no compiled binary exists. Use `--sync <config-id>`, `--install <id>`, `--update <id>`, and `--build <id>` to run a single component action explicitly. `sync` is reserved for config components. Plugin leaf rows are status-only; use group IDs such as `plugin-nvim`, `plugin-zsh`, and `plugin-tmux` for plugin install/update actions. `bin/dot sync` syncs the full chezmoi source directory, `home/`, into `$HOME`.
 
 ## Notes
 

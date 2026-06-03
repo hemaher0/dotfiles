@@ -19,6 +19,8 @@ packages/ubuntu.sh install
 packages/ubuntu.sh update
 packages/ubuntu.sh upgrade
 packages/ubuntu.sh user
+packages/ubuntu.sh user-libevent
+packages/ubuntu.sh user-ncurses
 packages/ubuntu.sh user-zsh
 packages/ubuntu.sh user-tmux
 packages/wsl.sh install

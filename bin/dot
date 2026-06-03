@@ -12,6 +12,7 @@ Commands:
   install [--user]
              Install the complete dotfiles setup
   update     Pull the repository, then show component status
+  tui        Open the Ratatui component dashboard
   doctor [--fix]
              Check local requirements and optionally repair user setup
   sync       Sync the chezmoi source directory
@@ -45,15 +46,31 @@ resolve_chezmoi() {
     printf '%s\n' "$HOME/.local/bin/chezmoi"
   elif [ -x "$ROOT_DIR/.local/bin/chezmoi" ]; then
     printf '%s\n' "$ROOT_DIR/.local/bin/chezmoi"
+  fi
+}
+
+chezmoi_resolver_source() {
+  resolved_chezmoi=$1
+
+  if [ -z "$resolved_chezmoi" ]; then
+    printf '%s\n' "missing"
+  elif [ -n "${CHEZMOI:-}" ] && [ "$resolved_chezmoi" = "$CHEZMOI" ]; then
+    printf '%s\n' "env"
+  elif [ "$resolved_chezmoi" = "chezmoi" ]; then
+    printf '%s\n' "PATH"
+  elif [ "$resolved_chezmoi" = "$HOME/.local/bin/chezmoi" ]; then
+    printf '%s\n' "home-local"
+  elif [ "$resolved_chezmoi" = "$ROOT_DIR/.local/bin/chezmoi" ]; then
+    printf '%s\n' "repo-local"
   else
-    printf '%s\n' "chezmoi"
+    printf '%s\n' "custom"
   fi
 }
 
 require_chezmoi() {
   CHEZMOI=$(resolve_chezmoi)
 
-  if ! has_command "$CHEZMOI"; then
+  if [ -z "$CHEZMOI" ] || ! has_command "$CHEZMOI"; then
     log "chezmoi is not installed"
     exit 1
   fi
@@ -64,7 +81,7 @@ sync_config() {
 
   if [ ! -d "$SOURCE_DIR" ]; then
     log "chezmoi source directory is not ready: $SOURCE_DIR"
-    return 0
+    return 1
   fi
 
   "$CHEZMOI" --source "$SOURCE_DIR" apply
@@ -75,7 +92,7 @@ sync_tmux_config() {
 
   if [ ! -d "$SOURCE_DIR" ]; then
     log "chezmoi source directory is not ready: $SOURCE_DIR"
-    return 0
+    return 1
   fi
 
   "$CHEZMOI" --source "$SOURCE_DIR" apply \
@@ -123,13 +140,18 @@ update_usage() {
   cat <<'EOF'
 Usage:
   dot update
+  dot update --check
+  dot update --raw
+  dot update --sync <config-id>
   dot update --install <id>
   dot update --update <id>
   dot update --build <id>
 
-Without options, pulls the repository, then prints a component status table with
-stable IDs. Action options run against the current checkout and then print the
-component status table.
+Without options, pulls the repository, then prints a component status table.
+--check prints the table without pulling. --raw prints machine-readable status
+rows without pulling. --sync is for config components.
+Action options run against the current checkout and then print the component
+status table.
 EOF
 }
 
@@ -217,41 +239,83 @@ component_registry() {
   nvim_lazy_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
 
   cat <<EOF
-repo-dotfiles|dotfiles repo|repo|git|repo|$ROOT_DIR
-package-git|git|system|package|command|git
-package-chezmoi|chezmoi|system|package|command|$CHEZMOI
-package-zsh|zsh|system/user|package/source|command|zsh
-package-tmux|tmux|system/user|package/source|command|tmux
-package-ncurses|ncurses|user|source|ncurses|${USER_PREFIX:-$HOME/.local}
-package-nvim|nvim|system/user|package/prebuilt|command|nvim
-package-rustc|rustc|system/user|package/rustup|command|rustc
-package-cargo|cargo|system/user|package/rustup|command|cargo
-package-downloader|curl or wget|system|package|any-command|curl,wget
-tool-zoxide|zoxide|user|prebuilt|command|zoxide
-tool-direnv|direnv|user|prebuilt|command|direnv
-config-zshrc|synced zshrc|config|chezmoi|file|$HOME/.zshrc
-config-zshenv|synced zshenv|config|chezmoi|file|$HOME/.zshenv
-config-p10k|synced Powerlevel10k config|config|chezmoi|file|$HOME/.p10k.zsh
-config-nvim|synced Neovim config|config|chezmoi|file|$HOME/.config/nvim/init.lua
-config-wezterm|synced WezTerm config|config|chezmoi|file|$HOME/.config/wezterm/wezterm.lua
-config-tmux|managed tmux config|config|chezmoi|symlink|$HOME/.config/tmux/tmux.conf
-config-tmux-local|managed tmux local config|config|chezmoi|file|$HOME/.config/tmux/tmux.conf.local
-tmux-oh-my|Oh my tmux checkout|tmux config|git|dir|${OH_MY_TMUX_DIR:-$HOME/.local/share/oh-my-tmux}
-zsh-antidote|Antidote|zsh plugin|git|file|$antidote_dir/antidote.zsh
-zsh-manifest|zsh plugin manifest|zsh plugin|chezmoi|file|$HOME/.config/zsh/plugins.txt
-zsh-powerlevel10k|zsh plugin: powerlevel10k|zsh plugin|antidote|dir|$antidote_home/github.com/romkatv/powerlevel10k
-zsh-forgit|zsh plugin: forgit|zsh plugin|antidote|dir|$antidote_home/github.com/wfxr/forgit
-zsh-vi-mode|zsh plugin: zsh-vi-mode|zsh plugin|antidote|dir|$antidote_home/github.com/jeffreytse/zsh-vi-mode
-nvim-lazy|Neovim plugin: lazy.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/lazy.nvim
-nvim-smart-splits|Neovim plugin: smart-splits.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/smart-splits.nvim
-nvim-blink-cmp|Neovim plugin: blink.cmp|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/blink.cmp
-nvim-neo-tree|Neovim plugin: neo-tree.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/neo-tree.nvim
-nvim-treesitter|Neovim plugin: nvim-treesitter|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/nvim-treesitter
-nvim-mason|Neovim plugin: mason.nvim|nvim plugin|lazy.nvim|dir|$nvim_lazy_dir/mason.nvim
+repo|git|local|repo-dotfiles|dotfiles repo|git|repo|$ROOT_DIR
+package|system|system|package-git|git|package|command|git
+package|system|system|package-chezmoi|chezmoi|package|command|$CHEZMOI
+package|source|local|package-zsh|zsh|source|command|zsh
+package|source|local|package-tmux|tmux|source|command|tmux
+package|prebuilt|local|package-nvim|nvim|prebuilt|command|nvim
+dependency|rustup|local|dependency-rust|Rust toolchain|rustup|all-commands|rustc,cargo
+dependency|source|local|dependency-ncurses|ncurses|source|ncurses|${USER_PREFIX:-$HOME/.local}
+dependency|source|local|dependency-libevent|libevent|source|libevent|${USER_PREFIX:-$HOME/.local}
+dependency|system|system|dependency-downloader|curl or wget|package|any-command|curl,wget
+tool|user-bin|local|tool-zoxide|zoxide|prebuilt|command|zoxide
+tool|user-bin|local|tool-direnv|direnv|prebuilt|command|direnv
+config|chezmoi|local|config-zshrc|synced zshrc|chezmoi|file|$HOME/.zshrc
+config|chezmoi|local|config-zshenv|synced zshenv|chezmoi|file|$HOME/.zshenv
+config|chezmoi|local|config-p10k|synced Powerlevel10k config|chezmoi|file|$HOME/.p10k.zsh
+config|chezmoi|local|config-nvim|synced Neovim config|chezmoi|file|$HOME/.config/nvim/init.lua
+config|chezmoi|local|config-wezterm|synced WezTerm config|chezmoi|file|$HOME/.config/wezterm/wezterm.lua
+config|tmux|local|config-tmux|managed tmux config|chezmoi|symlink|$HOME/.config/tmux/tmux.conf
+config|tmux|local|config-tmux-local|managed tmux local config|chezmoi|file|$HOME/.config/tmux/tmux.conf.local
+plugin|tmux|local|plugin-tmux|tmux plugins|git|group|tmux
+plugin|tmux|local|plugin-tmux-oh-my|Oh my tmux checkout|git|dir|${OH_MY_TMUX_DIR:-$HOME/.local/share/oh-my-tmux}
+plugin|zsh|local|plugin-zsh|zsh plugins|antidote|group|zsh
+plugin|zsh|local|plugin-zsh-antidote|Antidote|git|file|$antidote_dir/antidote.zsh
+plugin|zsh|local|plugin-zsh-manifest|zsh plugin manifest|chezmoi|file|$HOME/.config/zsh/plugins.txt
+plugin|zsh|local|plugin-zsh-powerlevel10k|zsh plugin: powerlevel10k|antidote|dir|$antidote_home/github.com/romkatv/powerlevel10k
+plugin|zsh|local|plugin-zsh-forgit|zsh plugin: forgit|antidote|dir|$antidote_home/github.com/wfxr/forgit
+plugin|zsh|local|plugin-zsh-vi-mode|zsh plugin: zsh-vi-mode|antidote|dir|$antidote_home/github.com/jeffreytse/zsh-vi-mode
+plugin|nvim|local|plugin-nvim|Neovim plugins|lazy.nvim|group|nvim
+plugin|nvim|local|plugin-nvim-lazy|Neovim plugin: lazy.nvim|lazy.nvim|dir|$nvim_lazy_dir/lazy.nvim
+plugin|nvim|local|plugin-nvim-smart-splits|Neovim plugin: smart-splits.nvim|lazy.nvim|dir|$nvim_lazy_dir/smart-splits.nvim
+plugin|nvim|local|plugin-nvim-blink-cmp|Neovim plugin: blink.cmp|lazy.nvim|dir|$nvim_lazy_dir/blink.cmp
+plugin|nvim|local|plugin-nvim-neo-tree|Neovim plugin: neo-tree.nvim|lazy.nvim|dir|$nvim_lazy_dir/neo-tree.nvim
+plugin|nvim|local|plugin-nvim-treesitter|Neovim plugin: nvim-treesitter|lazy.nvim|dir|$nvim_lazy_dir/nvim-treesitter
+plugin|nvim|local|plugin-nvim-mason|Neovim plugin: mason.nvim|lazy.nvim|dir|$nvim_lazy_dir/mason.nvim
 EOF
 
-  printf '%s\n' "font-red-hat-mono|Red Hat Mono|font|fontconfig|font|Red Hat Mono"
-  printf '%s\n' "font-d2coding-ligature|D2CodingLigature Nerd Font|font|fontconfig|font|D2CodingLigature Nerd Font"
+  printf '%s\n' "font|fontconfig|local|font-red-hat-mono|Red Hat Mono|fontconfig|font|Red Hat Mono"
+  printf '%s\n' "font|fontconfig|local|font-d2coding-ligature|D2CodingLigature Nerd Font|fontconfig|font|D2CodingLigature Nerd Font"
+}
+
+component_policy() {
+  component_id=$1
+  kind=$2
+  target=$3
+
+  case "$component_id" in
+    package-chezmoi)
+      printf '%s\n' "resolver:CHEZMOI,PATH,home-local,repo-local"
+      ;;
+    dependency-downloader)
+      printf '%s\n' "preferred:curl; alternative:wget"
+      ;;
+    *)
+      case "$kind" in
+        any-command)
+          printf 'first-available:%s\n' "$target"
+          ;;
+        *)
+          printf '%s\n' "-"
+          ;;
+      esac
+      ;;
+  esac
+}
+
+component_relation() {
+  component_id=$1
+  current=$2
+
+  case "$component_id:$current" in
+    config-tmux:target-missing)
+      printf '%s\n' "requires:plugin-tmux"
+      ;;
+    *)
+      printf '%s\n' "-"
+      ;;
+  esac
 }
 
 ncurses_current() {
@@ -274,99 +338,346 @@ ncurses_current() {
   done
 }
 
+libevent_current() {
+  user_prefix=$1
+
+  if [ -x "$user_prefix/bin/libevent-config" ]; then
+    "$user_prefix/bin/libevent-config" --version 2>/dev/null || true
+    return
+  fi
+
+  for lib_dir in "$user_prefix/lib" "$user_prefix/lib64"; do
+    for lib_name in libevent.so libevent.a; do
+      if [ -r "$lib_dir/$lib_name" ]; then
+        printf '%s\n' "present"
+        return
+      fi
+    done
+  done
+}
+
+first_command_version() {
+  commands=$1
+  old_ifs=$IFS
+  IFS=,
+
+  for command_name in $commands; do
+    if has_command "$command_name"; then
+      IFS=$old_ifs
+      command_version "$command_name" "$command_name"
+      return 0
+    fi
+  done
+
+  IFS=$old_ifs
+  return 1
+}
+
+plugin_group_status() {
+  group_name=$1
+  missing_count=0
+  total_count=0
+  registry_rows=$(component_registry)
+
+  while IFS='|' read -r category group scope component_id component_name method kind target; do
+    [ "$category:$group:$scope" = "plugin:$group_name:local" ] || continue
+    [ "$kind" != "group" ] || continue
+
+    total_count=$((total_count + 1))
+    case "$kind" in
+      file)
+        [ -r "$target" ] || missing_count=$((missing_count + 1))
+        ;;
+      dir)
+        [ -d "$target" ] || missing_count=$((missing_count + 1))
+        ;;
+      *)
+        missing_count=$((missing_count + 1))
+        ;;
+    esac
+  done <<EOF
+$registry_rows
+EOF
+
+  if [ "$total_count" -eq 0 ]; then
+    printf '%s|%s\n' "unknown" "no leaf components"
+  elif [ "$missing_count" -eq 0 ]; then
+    printf '%s|%s\n' "ok" "$total_count present"
+  else
+    printf '%s|%s\n' "missing" "$missing_count/$total_count missing"
+  fi
+}
+
+plugin_manager_id() {
+  group_name=$1
+
+  case "$group_name" in
+    nvim)
+      printf '%s\n' "plugin-nvim"
+      ;;
+    zsh)
+      printf '%s\n' "plugin-zsh"
+      ;;
+    tmux)
+      printf '%s\n' "plugin-tmux"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+default_action_kind() {
+  category=$1
+  group=$2
+
+  case "$category:$group" in
+    config:*)
+      printf '%s\n' "sync"
+      ;;
+    *)
+      printf '%s\n' "install"
+      ;;
+  esac
+}
+
+component_executor_target() {
+  component_id=$1
+  target=$2
+
+  case "$component_id" in
+    dependency-rust)
+      printf '%s\n' "rust"
+      ;;
+    dependency-ncurses)
+      printf '%s\n' "ncurses"
+      ;;
+    dependency-libevent)
+      printf '%s\n' "libevent"
+      ;;
+    plugin-nvim)
+      printf '%s\n' "nvim"
+      ;;
+    plugin-zsh)
+      printf '%s\n' "zsh"
+      ;;
+    plugin-tmux)
+      printf '%s\n' "tmux"
+      ;;
+    *)
+      printf '%s\n' "$target"
+      ;;
+  esac
+}
+
+render_action_command() {
+  action_kind=$1
+  action_target=$2
+
+  if [ "$action_kind" = "none" ] || [ -z "$action_target" ]; then
+    printf '%s\n' "-"
+  else
+    printf 'bin/dot update --%s %s\n' "$action_kind" "$action_target"
+  fi
+}
+
+component_status_fields() {
+  category=$1
+  group=$2
+  scope=$3
+  component_id=$4
+  component_name=$5
+  method=$6
+  kind=$7
+  target=$8
+  status=missing
+  current=
+  policy=$(component_policy "$component_id" "$kind" "$target")
+  action_kind=$(default_action_kind "$category" "$group")
+  action_target=$component_id
+
+  if [ "$category:$group" = "plugin:zsh" ] && [ "$component_id" = "plugin-zsh-manifest" ]; then
+    action_kind=sync
+  fi
+
+  case "$component_id" in
+    plugin-nvim-*|plugin-zsh-*|plugin-tmux-*)
+      action_kind=none
+      action_target=
+      ;;
+  esac
+
+  case "$kind" in
+    group)
+      group_status=$(plugin_group_status "$target")
+      status=${group_status%%|*}
+      current=${group_status#*|}
+      if [ "$status" = "ok" ]; then
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    repo)
+      if current=$(repo_version "$target"); then
+        status=ok
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    ncurses)
+      current=$(ncurses_current "$target")
+      if [ -n "$current" ]; then
+        status=ok
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    libevent)
+      current=$(libevent_current "$target")
+      if [ -n "$current" ]; then
+        status=ok
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    command)
+      if has_command "$target"; then
+        status=ok
+        case "$component_id" in
+          package-chezmoi)
+            current="$(chezmoi_resolver_source "$target"):$target"
+            ;;
+          *)
+            current=$(command_version "$component_name" "$target")
+            ;;
+        esac
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    all-commands)
+      missing_command=0
+      old_ifs=$IFS
+      IFS=,
+      for command_name in $target; do
+        if ! has_command "$command_name"; then
+          missing_command=1
+        fi
+      done
+      IFS=$old_ifs
+      if [ "$missing_command" -eq 0 ]; then
+        status=ok
+        current=$(first_command_version "$target")
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    any-command)
+      if command_name=$(first_available_command "$target"); then
+        status=ok
+        current=$command_name
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    file)
+      if [ -r "$target" ]; then
+        status=ok
+        current=present
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    symlink)
+      if [ -L "$target" ] && [ -r "$target" ]; then
+        status=ok
+        current=present
+        action_kind=none
+        action_target=
+      elif [ -L "$target" ]; then
+        current=target-missing
+        case "$component_id" in
+          config-tmux)
+            action_kind=install
+            action_target=plugin-tmux
+            ;;
+        esac
+      fi
+      ;;
+    dir)
+      if [ -d "$target" ]; then
+        status=ok
+        current=present
+        action_kind=none
+        action_target=
+      fi
+      ;;
+    font)
+      if ! has_command fc-list; then
+        status=unknown
+        action_kind=install
+        action_target=$component_id
+      elif font_installed "$target"; then
+        status=ok
+        current=$(font_current "$target")
+        action_kind=none
+        action_target=
+      fi
+      ;;
+  esac
+
+  if [ "$category" = "plugin" ] && [ "$kind" != "group" ]; then
+    if manager_id=$(plugin_manager_id "$group"); then
+      if [ "$status" != "ok" ] && [ -z "$current" ]; then
+        current="managed by $manager_id"
+      fi
+    fi
+    action_kind=none
+    action_target=
+  fi
+  relation=$(component_relation "$component_id" "$current")
+
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    "$status" "$category" "$group" "$scope" "$component_id" "$component_name" \
+    "$method" "$current" "$policy" "$relation" "$action_kind" "$action_target"
+}
+
+component_rows() {
+  component_registry | while IFS='|' read -r category group scope component_id component_name method kind target; do
+    component_status_fields "$category" "$group" "$scope" "$component_id" "$component_name" "$method" "$kind" "$target"
+  done
+}
+
 component_status_row() {
   status=$1
-  component_id=$2
-  component_name=$3
+  category=$2
+  group=$3
   scope=$4
-  method=$5
-  current=$6
-  action=$7
+  component_id=$5
+  component_name=$6
+  method=$7
+  current=$8
+  policy=$9
+  relation=${10:-}
+  action_kind=${11:-none}
+  action_target=${12:-}
+  action=$(render_action_command "$action_kind" "$action_target")
 
-  printf '%-8s %-26s %-34s %-12s %-16s %-16s %s\n' \
-    "$status" "$component_id" "$component_name" "$scope" "$method" "$(status_value "$current")" "$action"
+  printf '%-8s %-12s %-12s %-7s %-28s %-34s %-14s %-16s %-36s %-24s %s\n' \
+    "$status" "$category" "$group" "$scope" "$component_id" "$component_name" \
+    "$method" "$(status_value "$current")" "$(status_value "$policy")" \
+    "$(status_value "$relation")" "$action"
 }
 
 component_status_table() {
-  printf '%-8s %-26s %-34s %-12s %-16s %-16s %s\n' \
-    "STATUS" "ID" "COMPONENT" "SCOPE" "METHOD" "CURRENT" "ACTION"
-  printf '%-8s %-26s %-34s %-12s %-16s %-16s %s\n' \
-    "------" "--" "---------" "-----" "------" "-------" "------"
+  printf '%-8s %-12s %-12s %-7s %-28s %-34s %-14s %-16s %-36s %-24s %s\n' \
+    "STATUS" "CATEGORY" "GROUP" "SCOPE" "ID" "COMPONENT" "METHOD" "CURRENT" "POLICY" "RELATION" "ACTION"
+  printf '%-8s %-12s %-12s %-7s %-28s %-34s %-14s %-16s %-36s %-24s %s\n' \
+    "------" "--------" "-----" "-----" "--" "---------" "------" "-------" "------" "--------" "------"
 
-  component_registry | while IFS='|' read -r component_id component_name scope method kind target; do
-    status=missing
-    current=
-    next_action="bin/dot update --install $component_id"
-
-    case "$kind" in
-      repo)
-        if current=$(repo_version "$target"); then
-          status=ok
-          next_action=-
-        fi
-        ;;
-      ncurses)
-        current=$(ncurses_current "$target")
-        if [ -n "$current" ]; then
-          status=ok
-          next_action=-
-        fi
-        ;;
-      command)
-        if has_command "$target"; then
-          status=ok
-          current=$(command_version "$component_name" "$target")
-          next_action=-
-        fi
-        ;;
-      any-command)
-        if command_name=$(first_available_command "$target"); then
-          status=ok
-          current=$command_name
-          next_action=-
-        fi
-        ;;
-      file)
-        if [ -r "$target" ]; then
-          status=ok
-          current=present
-          next_action=-
-        fi
-        ;;
-      symlink)
-        if [ -L "$target" ] && [ -r "$target" ]; then
-          status=ok
-          current=present
-          next_action=-
-        elif [ -L "$target" ]; then
-          current=target-missing
-          case "$component_id" in
-            config-tmux)
-              next_action="bin/dot update --install tmux-oh-my"
-              ;;
-          esac
-        fi
-        ;;
-      dir)
-        if [ -d "$target" ]; then
-          status=ok
-          current=present
-          next_action=-
-        fi
-        ;;
-      font)
-        if ! has_command fc-list; then
-          status=unknown
-          next_action="bin/dot install"
-        elif font_installed "$target"; then
-          status=ok
-          current=$(font_current "$target")
-          next_action=-
-        fi
-        ;;
-    esac
-
-    component_status_row "$status" "$component_id" "$component_name" "$scope" "$method" "$current" "$next_action"
+  component_rows | while IFS='|' read -r status category group scope component_id component_name method current policy relation action_kind action_target; do
+    component_status_row "$status" "$category" "$group" "$scope" "$component_id" \
+      "$component_name" "$method" "$current" "$policy" "$relation" "$action_kind" "$action_target"
   done
 }
 
@@ -374,10 +685,23 @@ component_row() {
   component_id=$1
 
   component_registry | awk -F '|' -v component_id="$component_id" '
-    $1 == component_id {
+    $4 == component_id {
       print
       found = 1
-      exit
+    }
+    END {
+      exit found ? 0 : 1
+    }
+  '
+}
+
+component_status_row_by_id() {
+  component_id=$1
+
+  component_rows | awk -F '|' -v component_id="$component_id" '
+    $5 == component_id {
+      print
+      found = 1
     }
     END {
       exit found ? 0 : 1
@@ -386,7 +710,7 @@ component_row() {
 }
 
 list_component_ids() {
-  component_registry | sed 's/|.*//'
+  component_registry | awk -F '|' '{ print $4 }'
 }
 
 require_component_id() {
@@ -400,6 +724,25 @@ require_component_id() {
   log "known component ids:"
   list_component_ids | sed 's/^/  /'
   return 1
+}
+
+run_tui() {
+  manifest_path="$ROOT_DIR/tools/dot-tui/Cargo.toml"
+  release_binary="$ROOT_DIR/tools/dot-tui/target/release/dot-tui"
+  debug_binary="$ROOT_DIR/tools/dot-tui/target/debug/dot-tui"
+
+  if [ -x "$release_binary" ]; then
+    "$release_binary" "$ROOT_DIR"
+  elif [ -x "$debug_binary" ]; then
+    "$debug_binary" "$ROOT_DIR"
+  elif has_command cargo; then
+    log "building and running Ratatui dashboard"
+    cargo run --quiet --manifest-path "$manifest_path" -- "$ROOT_DIR"
+  else
+    log "cargo is required to build the Ratatui dashboard"
+    log "run: bin/dot update --install dependency-rust"
+    return 1
+  fi
 }
 
 pull_repository() {
@@ -442,63 +785,68 @@ unsupported_component_action() {
   return 1
 }
 
+managed_component_action() {
+  action_name=$1
+  component_id=$2
+  group_name=$3
+
+  if [ "$action_name" = "sync" ]; then
+    log "sync is only supported for config components: $component_id"
+    return 1
+  fi
+
+  if manager_id=$(plugin_manager_id "$group_name"); then
+    log "$action_name is managed by group component: $manager_id"
+    log "use: bin/dot update --$action_name $manager_id"
+  else
+    log "$action_name is not supported for component: $component_id"
+  fi
+  return 1
+}
+
 install_component() {
   component_id=$1
+  component_row=$(component_row "$component_id")
+  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
+$component_row
+EOF
+  executor_target=$(component_executor_target "$component_id" "$target")
 
-  case "$component_id" in
-    repo-dotfiles)
+  if [ "$category" = "plugin" ] && [ "$kind" != "group" ]; then
+    managed_component_action install "$component_id" "$group"
+    return
+  fi
+
+  case "$category:$group:$scope" in
+    repo:git:local)
       pull_repository
       ;;
-    package-git|package-downloader)
+    package:system:system|dependency:system:system)
       run_packages install
       ;;
-    package-chezmoi)
-      run_user_package_component chezmoi
-      ;;
-    package-zsh)
-      run_user_package_component zsh
-      ;;
-    package-tmux)
-      run_user_package_component tmux
-      ;;
-    package-ncurses)
-      run_user_package_component ncurses
-      ;;
-    package-nvim)
-      run_user_package_component nvim
-      ;;
-    package-rustc|package-cargo)
-      run_user_package_component rust
-      ;;
-    tool-zoxide)
-      run_tools install zoxide
+    package:*:local|dependency:*:local)
+      run_user_package_component "$executor_target"
       refresh_user_path
       ;;
-    tool-direnv)
-      run_tools install direnv
+    tool:user-bin:local)
+      run_tools install "$target"
       refresh_user_path
       ;;
-    config-tmux|config-tmux-local)
-      sync_tmux_config
-      refresh_user_path
+    config:*:local)
+      sync_component "$component_id"
       ;;
-    config-*|zsh-manifest)
-      sync_config
-      refresh_user_path
-      ;;
-    tmux-oh-my)
-      install_tmux_setup
-      sync_tmux_config
-      refresh_user_path
-      ;;
-    font-*)
-      run_fonts install
-      ;;
-    zsh-*)
+    plugin:zsh:local)
       install_zsh_setup
       ;;
-    nvim-*)
+    plugin:nvim:local)
       install_nvim_setup
+      ;;
+    plugin:tmux:local)
+      install_tmux_setup
+      sync_tmux_config
+      ;;
+    font:fontconfig:local)
+      run_fonts install
       ;;
     *)
       unsupported_component_action install "$component_id"
@@ -508,59 +856,46 @@ install_component() {
 
 update_component() {
   component_id=$1
+  component_row=$(component_row "$component_id")
+  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
+$component_row
+EOF
+  executor_target=$(component_executor_target "$component_id" "$target")
 
-  case "$component_id" in
-    repo-dotfiles)
+  if [ "$category" = "plugin" ] && [ "$kind" != "group" ]; then
+    managed_component_action update "$component_id" "$group"
+    return
+  fi
+
+  case "$category:$group:$scope" in
+    repo:git:local)
       pull_repository
       ;;
-    package-git|package-downloader)
+    package:system:system|dependency:system:system)
       run_packages upgrade
       ;;
-    package-chezmoi)
-      run_user_package_component chezmoi
-      ;;
-    package-zsh)
-      run_forced_user_package_component zsh
-      ;;
-    package-tmux)
-      run_forced_user_package_component tmux
-      ;;
-    package-ncurses)
-      run_forced_user_package_component ncurses
-      ;;
-    package-nvim)
-      run_forced_user_package_component nvim
-      ;;
-    package-rustc|package-cargo)
-      run_user_package_component rust
-      ;;
-    tool-zoxide)
-      run_tools update zoxide
+    package:*:local|dependency:*:local)
+      run_forced_user_package_component "$executor_target"
       refresh_user_path
       ;;
-    tool-direnv)
-      run_tools update direnv
+    tool:user-bin:local)
+      run_tools update "$target"
       refresh_user_path
       ;;
-    config-tmux|config-tmux-local)
-      sync_tmux_config
-      refresh_user_path
+    config:*:local)
+      sync_component "$component_id"
       ;;
-    config-*|zsh-manifest)
-      sync_config
-      refresh_user_path
-      ;;
-    font-*)
-      run_fonts update
-      ;;
-    tmux-oh-my)
-      update_tmux_setup
-      ;;
-    zsh-*)
+    plugin:zsh:local)
       update_zsh_setup
       ;;
-    nvim-*)
+    plugin:nvim:local)
       update_nvim_setup
+      ;;
+    plugin:tmux:local)
+      update_tmux_setup
+      ;;
+    font:fontconfig:local)
+      run_fonts update
       ;;
     *)
       unsupported_component_action update "$component_id"
@@ -568,18 +903,44 @@ update_component() {
   esac
 }
 
+sync_component() {
+  component_id=$1
+  component_row=$(component_row "$component_id")
+  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
+$component_row
+EOF
+
+  if [ "$category" != "config" ]; then
+    log "sync is only supported for config components: $component_id"
+    return 1
+  fi
+
+  case "$category:$group" in
+    config:tmux)
+      sync_tmux_config
+      refresh_user_path
+      ;;
+    config:chezmoi)
+      sync_config
+      refresh_user_path
+      ;;
+    *)
+      unsupported_component_action sync "$component_id"
+      ;;
+  esac
+}
+
 build_component() {
   component_id=$1
+  component_row=$(component_row "$component_id")
+  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
+$component_row
+EOF
+  executor_target=$(component_executor_target "$component_id" "$target")
 
-  case "$component_id" in
-    package-zsh)
-      run_forced_user_package_component zsh
-      ;;
-    package-ncurses)
-      run_forced_user_package_component ncurses
-      ;;
-    package-tmux)
-      run_forced_user_package_component tmux
+  case "$category:$group:$scope" in
+    package:source:local|dependency:source:local)
+      run_forced_user_package_component "$executor_target"
       ;;
     *)
       unsupported_component_action build "$component_id"
@@ -595,6 +956,9 @@ run_component_action() {
 
   log "$action_name component: $component_id"
   case "$action_name" in
+    sync)
+      sync_component "$component_id"
+      ;;
     install)
       install_component "$component_id"
       ;;
@@ -1100,6 +1464,34 @@ update_repo() {
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --check|check)
+        if [ "$update_action" != "status" ]; then
+          update_usage
+          return 1
+        fi
+        update_action=check
+        ;;
+      --raw|raw)
+        if [ "$update_action" != "status" ]; then
+          update_usage
+          return 1
+        fi
+        update_action=raw
+        ;;
+      --sync|sync)
+        if [ "$update_action" != "status" ]; then
+          update_usage
+          return 1
+        fi
+        if [ -z "${2:-}" ]; then
+          log "$1 requires a component id"
+          update_usage
+          return 1
+        fi
+        update_action=sync
+        update_component_id=$2
+        shift
+        ;;
       --install|install)
         if [ "$update_action" != "status" ]; then
           update_usage
@@ -1155,6 +1547,19 @@ update_repo() {
   done
 
   if [ "$update_action" != "status" ]; then
+    if [ "$update_action" = "check" ]; then
+      refresh_user_path
+      log "component status"
+      component_status_table
+      return
+    fi
+
+    if [ "$update_action" = "raw" ]; then
+      refresh_user_path
+      component_rows
+      return
+    fi
+
     run_component_action "$update_action" "$update_component_id"
     return
   fi
@@ -1177,6 +1582,9 @@ case "$command_name" in
     ;;
   install)
     install_setup "$@"
+    ;;
+  tui)
+    run_tui "$@"
     ;;
   sync)
     case "${1:-}" in
