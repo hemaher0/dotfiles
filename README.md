@@ -54,7 +54,7 @@ Set-Location $env:USERPROFILE\.dotfiles
 
 Windows bootstrap covers winget packages, chezmoi-managed files, bundled fonts, user tools, Neovim plugins, and WezTerm readiness. It does not configure zsh or tmux on Windows.
 
-Update the repository and resync the Windows setup:
+Update the repository and check the Windows setup:
 
 ```powershell
 .\update.ps1
