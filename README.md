@@ -21,7 +21,7 @@ The repository is managed with `chezmoi`. Bootstrap scripts handle the repeatabl
 ```sh
 git clone https://github.com/hemaher0/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
-./bootstrap.sh
+bin/dot install
 bin/dot doctor
 ```
 
@@ -36,7 +36,7 @@ chezmoi --source "$PWD/home" diff
 ```sh
 git clone https://github.com/hemaher0/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
-./bootstrap.sh
+bin/dot install
 bin/dot doctor
 ```
 
@@ -59,38 +59,32 @@ Update the repository and reapply the Windows setup:
 .\update.ps1
 ```
 
-### Build From Source
+### User-Local Install
 
-Use the user-local build path when `apt` cannot be used or Ubuntu packages are not suitable:
+Use the user-local install path when `apt` cannot be used or Ubuntu packages are not suitable:
 
 ```sh
 git clone https://github.com/hemaher0/dotfiles.git ~/.dotfiles
 cd ~/.dotfiles
-bin/dot packages build
-bin/dot apply
+bin/dot install --user
 bin/dot doctor
 ```
 
-This installs into `~/.local`, uses prebuilt zoxide, direnv, and Neovim releases, and builds missing zsh from source. zsh requires existing build tools such as `make`, `xz`, and a C compiler. It does not change the login shell.
+This installs supported components into `~/.local`, uses prebuilt zoxide, direnv, and Neovim releases, and installs missing zsh from source. zsh requires compiler prerequisites such as `make`, `xz`, and a C compiler. It does not change the login shell.
 
 ## Commands
 
 ```sh
+bin/dot install
+bin/dot install --user
+bin/dot update
 bin/dot doctor
 bin/dot doctor --fix
 bin/dot apply
-bin/dot packages
-bin/dot packages update
-bin/dot packages upgrade
-bin/dot packages build
-bin/dot fonts
-bin/dot tools
-bin/dot zsh-plugins
-bin/dot nvim
-bin/dot update
+bin/dot bootstrap
 ```
 
-`bin/dot apply` applies the chezmoi source directory, `home/`, into `$HOME`. It writes managed dotfiles only; package installs, fonts, and plugins are handled by the other commands.
+`bin/dot install` performs the complete setup and may use sudo for platform packages. `bin/dot install --user` uses the user-local strategy without sudo. `bin/dot update` pulls the repository, applies managed dotfiles, updates user-managed components, and checks the setup without installing OS packages. `bin/dot apply` only applies the chezmoi source directory, `home/`, into `$HOME`.
 
 ## Notes
 

@@ -1,6 +1,6 @@
 # Scripts
 
-Repository scripts for installing and updating tools that are not managed directly by chezmoi.
+Repository scripts for installing and updating components that are not managed directly by chezmoi. `bin/dot install` and `bin/dot update` call these scripts as internal workflow steps.
 
 ## Antidote
 
@@ -10,16 +10,10 @@ Install or update Antidote:
 scripts/install-antidote.sh
 ```
 
-Run through the command wrapper:
-
-```sh
-bin/dot zsh-plugins
-```
-
 Use `update` to require an existing Antidote checkout and update cloned bundles:
 
 ```sh
-bin/dot zsh-plugins update
+scripts/install-antidote.sh update
 ```
 
 The script clones Antidote into `${ZDOTDIR:-$HOME}/.antidote` by default. It does not write `~/.zshrc`, change the login shell, or start zsh. Dotfiles remain managed by chezmoi.
@@ -30,12 +24,6 @@ Install or update bundled terminal fonts:
 
 ```sh
 scripts/install-fonts.sh
-```
-
-Run through the command wrapper:
-
-```sh
-bin/dot fonts
 ```
 
 On Windows:
@@ -54,13 +42,7 @@ Install or update prebuilt user-local CLI tools:
 scripts/install-user-tools.sh
 ```
 
-Run through the command wrapper:
-
-```sh
-bin/dot tools
-```
-
-This installs `zoxide` and `direnv` without building from source. POSIX-like systems install official release binaries into `~/.local/bin`. Windows uses winget package IDs for the same tools.
+This installs `zoxide` and `direnv` from official release binaries into `~/.local/bin`. Windows uses winget package IDs for the same tools.
 
 ## Neovim
 
@@ -68,12 +50,6 @@ Install or update plugins for the default Neovim profile:
 
 ```sh
 scripts/install-neovim-plugins.sh
-```
-
-Run through the command wrapper:
-
-```sh
-bin/dot nvim
 ```
 
 Use `NVIM_APPNAME` to target another Neovim profile.

@@ -48,13 +48,13 @@ PACKAGES=(
 
 usage() {
   cat <<'EOF'
-Usage: ubuntu.sh [install|update|upgrade|build|help]
+Usage: ubuntu.sh [install|update|upgrade|user|help]
 
 Commands:
   install  Update the apt index and install baseline packages
   update   Update the apt package index
   upgrade  Upgrade installed baseline packages only
-  build    Install user-local tools, build missing zsh, and install Neovim tarball
+  user     Install supported components into the user profile without apt
 EOF
 }
 
@@ -87,7 +87,7 @@ as_root() {
     sudo "$@"
   else
     log "sudo is required for apt operations"
-    log "without sudo, run: bin/dot packages build"
+    log "without sudo, run: bin/dot install --user"
     exit 1
   fi
 }
@@ -139,7 +139,7 @@ upgrade_packages() {
   as_root apt-get install -y --only-upgrade "${PACKAGES[@]}"
 }
 
-build_jobs() {
+compile_jobs() {
   if has_command getconf; then
     jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
     if [ -n "$jobs" ] && [ "$jobs" -gt 0 ] 2>/dev/null; then
@@ -160,18 +160,18 @@ require_source_commands() {
 
   for command_name in "$@"; do
     if ! has_command "$command_name"; then
-      log "$command_name is required for source builds"
+      log "$command_name is required for source installs"
       missing=1
     fi
   done
 
   if ! has_c_compiler; then
-    log "a C compiler is required for source builds"
+    log "a C compiler is required for source installs"
     missing=1
   fi
 
   if [ "$missing" -ne 0 ]; then
-    log "install build dependencies first, or use the normal apt path with sudo"
+    log "install compiler prerequisites first, or use the normal apt path with sudo"
     exit 1
   fi
 }
@@ -190,7 +190,7 @@ install_user_tools() {
   BIN_DIR="$BIN_DIR" "$ROOT_DIR/scripts/install-user-tools.sh" install
 }
 
-build_zsh_from_source() {
+install_zsh_from_source() {
   if ! should_install_command zsh; then
     log "zsh is already available"
     return
@@ -202,14 +202,14 @@ build_zsh_from_source() {
   archive="$tmp_dir/zsh-$ZSH_VERSION.tar.xz"
   url="https://www.zsh.org/pub/zsh-$ZSH_VERSION.tar.xz"
 
-  log "building zsh $ZSH_VERSION into $USER_PREFIX"
+  log "installing zsh $ZSH_VERSION from source into $USER_PREFIX"
   (
     trap 'rm -rf "$tmp_dir"' EXIT
     download "$url" "$archive"
     tar -xJf "$archive" -C "$tmp_dir"
     cd "$tmp_dir/zsh-$ZSH_VERSION"
     ./configure --prefix="$USER_PREFIX"
-    make -j"$(build_jobs)"
+    make -j"$(compile_jobs)"
     make install
   )
 }
@@ -266,12 +266,12 @@ install_neovim_binary() {
   )
 }
 
-build_user_setup() {
+install_user_setup() {
   mkdir -p "$BIN_DIR" "$OPT_DIR"
 
   install_chezmoi
   install_user_tools
-  build_zsh_from_source
+  install_zsh_from_source
   install_neovim_binary
 
   log "Ubuntu user-local setup complete"
@@ -298,8 +298,8 @@ case "$command_name" in
     require_apt
     upgrade_packages
     ;;
-  build)
-    build_user_setup
+  user)
+    install_user_setup
     ;;
   *)
     usage

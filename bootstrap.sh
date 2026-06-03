@@ -23,7 +23,7 @@ main() {
     exit 0
   fi
 
-  DOTFILES_SOURCE_DIR="$SOURCE_DIR" sh "$DOT_BIN" doctor --fix
+  DOTFILES_SOURCE_DIR="$SOURCE_DIR" sh "$DOT_BIN" install "$@"
 }
 
 main "$@"

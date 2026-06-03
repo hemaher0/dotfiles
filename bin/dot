@@ -9,16 +9,13 @@ usage() {
 Usage: dot <command>
 
 Commands:
-  bootstrap  Run the repository bootstrap script
+  install [--user]
+             Install the complete dotfiles setup
+  update     Pull the repository, apply configuration, update user setup, then check
+  doctor [--fix]
+             Check local requirements and optionally repair user setup
   apply      Apply the chezmoi source directory
-  packages [install|update|upgrade|build]
-             Run the detected platform package script
-  fonts      Install or update preferred terminal fonts
-  tools      Install or update prebuilt user-local CLI tools
-  zsh-plugins  Install or update Antidote-managed zsh plugins
-  nvim       Install or update Neovim plugins
-  doctor [--fix]  Check local requirements and optionally install missing setup
-  update     Pull the repository, apply configuration, then repair missing setup
+  bootstrap  Run the repository bootstrap script
   help       Show this help
 EOF
 }
@@ -90,8 +87,27 @@ doctor_usage() {
   cat <<'EOF'
 Usage: dot doctor [--fix]
 
-Checks the local dotfiles setup. With --fix, installs or syncs missing
-supported components using the repository scripts.
+Checks the local dotfiles setup. With --fix, repairs supported user-managed
+components. It does not install OS packages.
+EOF
+}
+
+install_usage() {
+  cat <<'EOF'
+Usage: dot install [--user]
+
+Installs the complete dotfiles setup. The default install uses the detected
+platform package manager and may ask for sudo. With --user, installs supported
+components into the user profile without sudo.
+EOF
+}
+
+update_usage() {
+  cat <<'EOF'
+Usage: dot update
+
+Pulls the repository, applies the chezmoi source directory, updates user-managed
+components, then checks the setup. It does not install or upgrade OS packages.
 EOF
 }
 
@@ -309,8 +325,7 @@ doctor_check() {
 
 doctor_fix() {
   if [ "$need_packages" -eq 1 ]; then
-    log "fix: running platform package setup"
-    run_packages
+    mark_warning "skipping OS package setup; run bin/dot install or bin/dot install --user"
   fi
 
   CHEZMOI=$(resolve_chezmoi)
@@ -331,28 +346,23 @@ doctor_fix() {
   fi
 
   if [ "$need_tools" -eq 1 ]; then
-    log "fix: installing user-local tools"
-    run_tools install
-    refresh_user_path
+    if has_command curl || has_command wget; then
+      log "fix: installing user-local tools"
+      run_tools install
+      refresh_user_path
+    else
+      mark_warning "skipping user-local tools because curl or wget is unavailable"
+    fi
   fi
 
   if [ "$need_zsh_plugins" -eq 1 ]; then
     log "fix: installing Antidote"
-    run_zsh_plugins install
-
-    if [ -r "$HOME/.config/zsh/plugins.txt" ]; then
-      log "fix: syncing zsh bundles"
-      run_zsh_plugins update
-    fi
+    install_zsh_setup
   fi
 
   if [ "$need_nvim_plugins" -eq 1 ]; then
-    if has_command nvim; then
-      log "fix: installing Neovim plugins"
-      run_nvim install
-    else
-      mark_warning "skipping Neovim plugin install because nvim is unavailable"
-    fi
+    log "fix: installing Neovim plugins"
+    install_nvim_setup
   fi
 }
 
@@ -399,6 +409,14 @@ run_packages() {
   fi
 }
 
+run_user_packages() {
+  if is_termux; then
+    run_packages install
+  else
+    run_packages user
+  fi
+}
+
 run_zsh_plugins() {
   "$ROOT_DIR/scripts/install-antidote.sh" "$@"
 }
@@ -420,7 +438,127 @@ run_nvim() {
   "$ROOT_DIR/scripts/install-neovim-plugins.sh" "$@"
 }
 
+run_user_tools_if_needed() {
+  command_name=$1
+
+  if is_termux; then
+    log "skipping user-local tools; Termux packages manage zoxide and direnv"
+    return
+  fi
+
+  run_tools "$command_name"
+  refresh_user_path
+}
+
+install_zsh_setup() {
+  if ! has_command git; then
+    mark_warning "skipping zsh plugin install because git is unavailable"
+    return
+  fi
+
+  run_zsh_plugins install
+
+  if [ -r "$HOME/.config/zsh/plugins.txt" ] && has_command zsh; then
+    run_zsh_plugins update
+  else
+    mark_warning "skipping zsh bundle sync because zsh or the plugin manifest is unavailable"
+  fi
+}
+
+update_zsh_setup() {
+  antidote_dir="${ANTIDOTE_DIR:-${ZDOTDIR:-$HOME}/.antidote}"
+  plugin_file="${ZSH_PLUGIN_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/zsh/plugins.txt}"
+
+  if [ -d "$antidote_dir/.git" ] && [ -r "$plugin_file" ] && has_command zsh; then
+    run_zsh_plugins update
+  else
+    mark_warning "skipping zsh plugin update because Antidote, zsh, or the plugin manifest is unavailable"
+  fi
+}
+
+install_nvim_setup() {
+  if has_command nvim; then
+    run_nvim install
+  else
+    mark_warning "skipping Neovim plugin install because nvim is unavailable"
+  fi
+}
+
+update_nvim_setup() {
+  if has_command nvim; then
+    run_nvim update
+  else
+    mark_warning "skipping Neovim plugin update because nvim is unavailable"
+  fi
+}
+
+install_setup() {
+  install_mode=system
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --user|user)
+        install_mode=user
+        ;;
+      help|-h|--help)
+        install_usage
+        return 0
+        ;;
+      *)
+        install_usage
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  if [ "$install_mode" = "user" ]; then
+    log "installing user-local setup"
+    run_user_packages
+  else
+    log "installing platform package setup"
+    run_packages install
+  fi
+
+  refresh_user_path
+
+  log "applying configuration"
+  apply_config
+  refresh_user_path
+
+  log "installing bundled fonts"
+  run_fonts install
+
+  if [ "$install_mode" != "user" ]; then
+    log "installing user-local tools"
+    run_user_tools_if_needed install
+  fi
+
+  log "installing zsh plugins"
+  install_zsh_setup
+
+  log "installing Neovim plugins"
+  install_nvim_setup
+
+  log "checking setup"
+  doctor
+}
+
 update_repo() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      help|-h|--help)
+        update_usage
+        return 0
+        ;;
+      *)
+        update_usage
+        return 1
+        ;;
+    esac
+    shift
+  done
+
   if ! has_command git; then
     log "git is required for update"
     exit 1
@@ -432,8 +570,20 @@ update_repo() {
   log "applying configuration"
   apply_config
 
-  log "checking repaired setup"
-  doctor --fix
+  log "updating bundled fonts"
+  run_fonts update
+
+  log "updating user-local tools"
+  run_user_tools_if_needed update
+
+  log "updating zsh plugins"
+  update_zsh_setup
+
+  log "updating Neovim plugins"
+  update_nvim_setup
+
+  log "checking setup"
+  doctor
 }
 
 command_name="${1:-help}"
@@ -443,31 +593,19 @@ fi
 
 case "$command_name" in
   bootstrap)
-    "$ROOT_DIR/bootstrap.sh"
+    "$ROOT_DIR/bootstrap.sh" "$@"
+    ;;
+  install)
+    install_setup "$@"
     ;;
   apply)
     apply_config
-    ;;
-  packages)
-    run_packages "$@"
-    ;;
-  fonts)
-    run_fonts "$@"
-    ;;
-  tools)
-    run_tools "$@"
-    ;;
-  zsh-plugins)
-    run_zsh_plugins "$@"
-    ;;
-  nvim)
-    run_nvim "$@"
     ;;
   doctor)
     doctor "$@"
     ;;
   update)
-    update_repo
+    update_repo "$@"
     ;;
   help|-h|--help)
     usage

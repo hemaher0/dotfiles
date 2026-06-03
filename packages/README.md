@@ -1,6 +1,6 @@
 # Package Scripts
 
-These scripts install baseline tools for each supported platform. They can be run directly, and the bootstrap or doctor flows may call them when required commands are missing.
+These scripts are implementation details for the package setup used by `bin/dot install`. They install or update baseline tools for each supported platform.
 
 ## Scripts
 
@@ -13,22 +13,15 @@ These scripts install baseline tools for each supported platform. They can be ru
 
 ## Usage
 
-Run the detected POSIX script:
+Run a specific POSIX script while maintaining the package flows:
 
 ```sh
-bin/dot packages
-bin/dot packages update
-bin/dot packages upgrade
-bin/dot packages build
-```
-
-Run a specific POSIX script:
-
-```sh
-packages/ubuntu.sh
-packages/ubuntu.sh build
-packages/wsl.sh
-packages/termux.sh
+packages/ubuntu.sh install
+packages/ubuntu.sh update
+packages/ubuntu.sh upgrade
+packages/ubuntu.sh user
+packages/wsl.sh install
+packages/termux.sh install
 ```
 
 Run the Windows script:
@@ -41,6 +34,6 @@ Run the Windows script:
 
 `update` refreshes package indexes or sources. `upgrade` is limited to the baseline packages managed by this repository; it does not run full-system upgrade commands such as `apt upgrade`, `pkg upgrade`, or `winget upgrade --all`.
 
-On Ubuntu, `build` installs user-local tools into `~/.local/bin`, uses prebuilt zoxide, direnv, and Neovim releases, and builds missing zsh from source. It is useful when `apt` cannot be used or distro packages are not suitable. It does not change the login shell. zsh requires existing build tools such as `make`, `xz`, and a C compiler. Set `DOTFILES_FORCE_USER_INSTALL=1` to reinstall even when commands already exist.
+On Ubuntu, `user` installs supported components into `~/.local`, uses prebuilt zoxide, direnv, and Neovim releases, and installs missing zsh from source. It is used by `bin/dot install --user`. zsh requires compiler prerequisites such as `make`, `xz`, and a C compiler. It does not change the login shell. Set `DOTFILES_FORCE_USER_INSTALL=1` to reinstall even when commands already exist.
 
 Review each script before running it on a new machine. Package names and availability can vary by OS version.
