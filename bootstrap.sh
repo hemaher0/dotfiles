@@ -19,7 +19,7 @@ main() {
 
   if [ ! -d "$SOURCE_DIR" ]; then
     log "chezmoi source directory is not ready: $SOURCE_DIR"
-    log "nothing to apply yet"
+    log "nothing to sync yet"
     exit 0
   fi
 

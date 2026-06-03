@@ -114,7 +114,7 @@ function Test-FileStatus {
     }
 
     Mark-Missing $Description
-    $script:NeedApply = $true
+    $script:NeedSync = $true
 }
 
 function Test-WindowsConfigFileStatus {
@@ -259,7 +259,7 @@ function Test-WezTermStatus {
 
 function Invoke-DoctorCheck {
     $script:Failed = $false
-    $script:NeedApply = $false
+    $script:NeedSync = $false
     $script:NeedFonts = $false
     $script:NeedNvimPlugins = $false
     $script:NeedPackages = $false
@@ -313,15 +313,15 @@ function Invoke-WindowsPackages {
     Update-ProcessPath
 }
 
-function Invoke-ChezmoiApply {
+function Invoke-ChezmoiSync {
     $script:Chezmoi = Resolve-Chezmoi
 
     if (-not (Test-Command $script:Chezmoi)) {
-        Mark-Warning "skipping chezmoi apply because chezmoi is unavailable"
+        Mark-Warning "skipping chezmoi sync because chezmoi is unavailable"
         return
     }
 
-    Write-DotfilesLog "fix: applying chezmoi source"
+    Write-DotfilesLog "fix: syncing chezmoi source"
     & $script:Chezmoi --source $SourceDir apply
 }
 
@@ -372,8 +372,8 @@ function Invoke-DoctorFix {
         Invoke-WindowsPackages
     }
 
-    if ($script:NeedApply) {
-        Invoke-ChezmoiApply
+    if ($script:NeedSync) {
+        Invoke-ChezmoiSync
         $script:NeedWindowsConfigSync = $true
     }
 
@@ -398,7 +398,7 @@ Write-DotfilesLog "starting Windows bootstrap"
 
 if (-not (Test-Path -Path $SourceDir -PathType Container)) {
     Write-DotfilesLog "chezmoi source directory is not ready: $SourceDir"
-    Write-DotfilesLog "nothing to apply yet"
+    Write-DotfilesLog "nothing to sync yet"
     exit 0
 }
 

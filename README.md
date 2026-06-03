@@ -54,7 +54,7 @@ Set-Location $env:USERPROFILE\.dotfiles
 
 Windows bootstrap covers winget packages, chezmoi-managed files, bundled fonts, user tools, Neovim plugins, and WezTerm readiness. It does not configure zsh or tmux on Windows.
 
-Update the repository and reapply the Windows setup:
+Update the repository and resync the Windows setup:
 
 ```powershell
 .\update.ps1
@@ -86,11 +86,11 @@ bin/dot update --build package-tmux
 bin/dot update --install tmux-oh-my
 bin/dot doctor
 bin/dot doctor --fix
-bin/dot apply
+bin/dot sync
 bin/dot bootstrap
 ```
 
-`bin/dot install` performs the complete setup and may use sudo for platform packages. `bin/dot install --user` uses the user-local strategy without sudo. `bin/dot update` pulls the repository and prints a component status table with stable component IDs. Use `bin/dot update --install <id>`, `--update <id>`, or `--build <id>` to run a single component action explicitly. `bin/dot apply` only applies the chezmoi source directory, `home/`, into `$HOME`.
+`bin/dot install` performs the complete setup and may use sudo for platform packages. `bin/dot install --user` uses the user-local strategy without sudo. `bin/dot update` pulls the repository and prints a component status table with stable component IDs. Use `bin/dot update --install <id>`, `--update <id>`, or `--build <id>` to run a single component action explicitly. `bin/dot sync` only syncs the chezmoi source directory, `home/`, into `$HOME`.
 
 ## Notes
 

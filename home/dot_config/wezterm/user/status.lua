@@ -1,6 +1,6 @@
 local M = {}
 
-function M.apply(config, wezterm)
+function M.sync(config, wezterm)
   local min_tab_width = 50
 
   wezterm.on("format-tab-title", function(tab, tabs, panes, current_config, hover, max_width)

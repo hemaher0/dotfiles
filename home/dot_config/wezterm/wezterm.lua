@@ -11,7 +11,7 @@ for _, module in ipairs({
   "user.smart_splits",
   "user.status",
 }) do
-  require(module).apply(config, wezterm)
+  require(module).sync(config, wezterm)
 end
 
 local separator = package.config:sub(1, 1)
@@ -20,7 +20,7 @@ local local_file = io.open(local_path, "r")
 if local_file then
   local_file:close()
   local local_config = require("user.local")
-  local_config.apply(config, wezterm)
+  local_config.sync(config, wezterm)
 end
 
 return config

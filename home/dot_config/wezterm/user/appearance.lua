@@ -1,6 +1,6 @@
 local M = {}
 
-function M.apply(config, wezterm)
+function M.sync(config, wezterm)
   config.initial_cols = 100
   config.initial_rows = 24
 

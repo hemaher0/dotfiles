@@ -4,7 +4,7 @@ local function is_windows(wezterm)
   return wezterm.target_triple:find("windows") ~= nil
 end
 
-function M.apply(config, wezterm)
+function M.sync(config, wezterm)
   if is_windows(wezterm) then
     config.default_prog = { "pwsh.exe", "-NoLogo" }
     config.launch_menu = {

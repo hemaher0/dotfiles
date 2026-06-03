@@ -60,7 +60,7 @@ local function split_nav(wezterm, resize_or_move, key)
   }
 end
 
-function M.apply(config, wezterm)
+function M.sync(config, wezterm)
   config.keys = config.keys or {}
 
   for _, key in ipairs({ "h", "j", "k", "l" }) do

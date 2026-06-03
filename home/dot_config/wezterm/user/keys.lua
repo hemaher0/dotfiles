@@ -1,6 +1,6 @@
 local M = {}
 
-function M.apply(config, wezterm)
+function M.sync(config, wezterm)
   config.keys = {
     {
       key = "w",

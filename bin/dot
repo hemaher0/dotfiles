@@ -14,7 +14,7 @@ Commands:
   update     Pull the repository, then show component status
   doctor [--fix]
              Check local requirements and optionally repair user setup
-  apply      Apply the chezmoi source directory
+  sync       Sync the chezmoi source directory
   bootstrap  Run the repository bootstrap script
   help       Show this help
 EOF
@@ -59,7 +59,7 @@ require_chezmoi() {
   fi
 }
 
-apply_config() {
+sync_config() {
   require_chezmoi
 
   if [ ! -d "$SOURCE_DIR" ]; then
@@ -68,6 +68,19 @@ apply_config() {
   fi
 
   "$CHEZMOI" --source "$SOURCE_DIR" apply
+}
+
+sync_tmux_config() {
+  require_chezmoi
+
+  if [ ! -d "$SOURCE_DIR" ]; then
+    log "chezmoi source directory is not ready: $SOURCE_DIR"
+    return 0
+  fi
+
+  "$CHEZMOI" --source "$SOURCE_DIR" apply \
+    "$HOME/.config/tmux/tmux.conf" \
+    "$HOME/.config/tmux/tmux.conf.local"
 }
 
 refresh_user_path() {
@@ -95,6 +108,14 @@ Usage: dot install [--user]
 Installs the complete dotfiles setup. The default install uses the detected
 platform package manager and may ask for sudo. With --user, installs supported
 components into the user profile without sudo.
+EOF
+}
+
+sync_usage() {
+  cat <<'EOF'
+Usage: dot sync
+
+Syncs the chezmoi source directory into the home directory.
 EOF
 }
 
@@ -208,11 +229,11 @@ package-cargo|cargo|system/user|package/rustup|command|cargo
 package-downloader|curl or wget|system|package|any-command|curl,wget
 tool-zoxide|zoxide|user|prebuilt|command|zoxide
 tool-direnv|direnv|user|prebuilt|command|direnv
-config-zshrc|managed zshrc|config|chezmoi|file|$HOME/.zshrc
-config-zshenv|managed zshenv|config|chezmoi|file|$HOME/.zshenv
-config-p10k|Powerlevel10k config|config|chezmoi|file|$HOME/.p10k.zsh
-config-nvim|managed Neovim config|config|chezmoi|file|$HOME/.config/nvim/init.lua
-config-wezterm|managed WezTerm config|config|chezmoi|file|$HOME/.config/wezterm/wezterm.lua
+config-zshrc|synced zshrc|config|chezmoi|file|$HOME/.zshrc
+config-zshenv|synced zshenv|config|chezmoi|file|$HOME/.zshenv
+config-p10k|synced Powerlevel10k config|config|chezmoi|file|$HOME/.p10k.zsh
+config-nvim|synced Neovim config|config|chezmoi|file|$HOME/.config/nvim/init.lua
+config-wezterm|synced WezTerm config|config|chezmoi|file|$HOME/.config/wezterm/wezterm.lua
 config-tmux|managed tmux config|config|chezmoi|symlink|$HOME/.config/tmux/tmux.conf
 config-tmux-local|managed tmux local config|config|chezmoi|file|$HOME/.config/tmux/tmux.conf.local
 tmux-oh-my|Oh my tmux checkout|tmux config|git|dir|${OH_MY_TMUX_DIR:-$HOME/.local/share/oh-my-tmux}
@@ -457,13 +478,17 @@ install_component() {
       run_tools install direnv
       refresh_user_path
       ;;
+    config-tmux|config-tmux-local)
+      sync_tmux_config
+      refresh_user_path
+      ;;
     config-*|zsh-manifest)
-      apply_config
+      sync_config
       refresh_user_path
       ;;
     tmux-oh-my)
       install_tmux_setup
-      apply_config
+      sync_tmux_config
       refresh_user_path
       ;;
     font-*)
@@ -517,8 +542,12 @@ update_component() {
       run_tools update direnv
       refresh_user_path
       ;;
+    config-tmux|config-tmux-local)
+      sync_tmux_config
+      refresh_user_path
+      ;;
     config-*|zsh-manifest)
-      apply_config
+      sync_config
       refresh_user_path
       ;;
     font-*)
@@ -621,7 +650,7 @@ check_file_status() {
     log "ok: $description"
   else
     mark_missing "$description"
-    need_apply=1
+    need_sync=1
   fi
 }
 
@@ -633,7 +662,7 @@ check_user_tool_status() {
     log "ok: command $command_name"
   elif [ -x "$tool_path" ]; then
     mark_missing "command $command_name is installed but not on PATH: $tool_path"
-    need_apply=1
+    need_sync=1
   else
     mark_missing "command $command_name"
     need_tools=1
@@ -740,10 +769,15 @@ check_tmux_status() {
     log "ok: managed tmux config"
   else
     mark_missing "managed tmux config"
-    need_apply=1
+    need_tmux=1
   fi
 
-  check_file_status "$HOME/.config/tmux/tmux.conf.local" "managed tmux local config"
+  if [ -r "$HOME/.config/tmux/tmux.conf.local" ]; then
+    log "ok: managed tmux local config"
+  else
+    mark_missing "managed tmux local config"
+    need_tmux=1
+  fi
 }
 
 check_wezterm_status() {
@@ -769,7 +803,7 @@ check_wezterm_status() {
 
 doctor_check() {
   failed=0
-  need_apply=0
+  need_sync=0
   need_fonts=0
   need_nvim_plugins=0
   need_packages=0
@@ -800,11 +834,11 @@ doctor_check() {
     mark_missing "chezmoi source $SOURCE_DIR"
   fi
 
-  check_file_status "$HOME/.zshrc" "managed zshrc"
-  check_file_status "$HOME/.zshenv" "managed zshenv"
-  check_file_status "$HOME/.p10k.zsh" "Powerlevel10k config"
-  check_file_status "$HOME/.config/nvim/init.lua" "managed Neovim config"
-  check_file_status "$HOME/.config/wezterm/wezterm.lua" "managed WezTerm config"
+  check_file_status "$HOME/.zshrc" "synced zshrc"
+  check_file_status "$HOME/.zshenv" "synced zshenv"
+  check_file_status "$HOME/.p10k.zsh" "synced Powerlevel10k config"
+  check_file_status "$HOME/.config/nvim/init.lua" "synced Neovim config"
+  check_file_status "$HOME/.config/wezterm/wezterm.lua" "synced WezTerm config"
 
   check_user_tool_status zoxide
   check_user_tool_status direnv
@@ -822,13 +856,13 @@ doctor_fix() {
 
   CHEZMOI=$(resolve_chezmoi)
 
-  if [ "$need_apply" -eq 1 ]; then
+  if [ "$need_sync" -eq 1 ]; then
     if has_command "$CHEZMOI"; then
-      log "fix: applying chezmoi source"
-      apply_config
+      log "fix: syncing chezmoi source"
+      sync_config
       refresh_user_path
     else
-      mark_warning "skipping chezmoi apply because chezmoi is unavailable"
+      mark_warning "skipping chezmoi sync because chezmoi is unavailable"
     fi
   fi
 
@@ -848,8 +882,9 @@ doctor_fix() {
   fi
 
   if [ "$need_tmux" -eq 1 ]; then
-    log "fix: installing Oh my tmux"
+    log "fix: installing tmux setup"
     install_tmux_setup
+    sync_tmux_config
   fi
 
   if [ "$need_zsh_plugins" -eq 1 ]; then
@@ -1034,8 +1069,8 @@ install_setup() {
 
   refresh_user_path
 
-  log "applying configuration"
-  apply_config
+  log "syncing configuration"
+  sync_config
   refresh_user_path
 
   log "installing bundled fonts"
@@ -1143,8 +1178,20 @@ case "$command_name" in
   install)
     install_setup "$@"
     ;;
-  apply)
-    apply_config
+  sync)
+    case "${1:-}" in
+      help|-h|--help)
+        sync_usage
+        exit 0
+        ;;
+      "")
+        ;;
+      *)
+        sync_usage
+        exit 1
+        ;;
+    esac
+    sync_config
     ;;
   doctor)
     doctor "$@"
