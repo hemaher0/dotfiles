@@ -1,0 +1,49 @@
+# Managed by chezmoi.
+
+[[ -o interactive ]] || return
+
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export ZSH_CONFIG_DIR="${ZSH_CONFIG_DIR:-$XDG_CONFIG_HOME/zsh}"
+export ZSH_CACHE_DIR="${ZSH_CACHE_DIR:-$XDG_CACHE_HOME/zsh}"
+export P10K_CONFIG_FILE="${P10K_CONFIG_FILE:-$HOME/.p10k.zsh}"
+
+export ANTIDOTE_HOME="${ANTIDOTE_HOME:-$XDG_CACHE_HOME/antidote}"
+export ANTIDOTE_DIR="${ANTIDOTE_DIR:-${ZDOTDIR:-$HOME}/.antidote}"
+export ANTIDOTE_SCRIPT="${ANTIDOTE_SCRIPT:-$ANTIDOTE_DIR/antidote.zsh}"
+export ZSH_PLUGIN_FILE="${ZSH_PLUGIN_FILE:-$ZSH_CONFIG_DIR/plugins.txt}"
+
+if [[ -d "$ZSH_CONFIG_DIR/pre" ]]; then
+  for zsh_config_file in "$ZSH_CONFIG_DIR"/pre/*.zsh(N); do
+    source "$zsh_config_file"
+  done
+fi
+
+if [[ -r "$ANTIDOTE_SCRIPT" && -r "$ZSH_PLUGIN_FILE" ]]; then
+  source "$ANTIDOTE_SCRIPT"
+  antidote load "$ZSH_PLUGIN_FILE"
+else
+  autoload -Uz compinit
+  mkdir -p "$ZSH_CACHE_DIR"
+  compinit -d "$ZSH_CACHE_DIR/zcompdump-${ZSH_VERSION}"
+fi
+
+[[ -r "$P10K_CONFIG_FILE" ]] && source "$P10K_CONFIG_FILE"
+
+if [[ -z "${PROMPT:-}" ]]; then
+  PROMPT='%F{green}%n@%m%f:%F{blue}%~%f %# '
+fi
+
+if [[ -d "$ZSH_CONFIG_DIR/post" ]]; then
+  for zsh_config_file in "$ZSH_CONFIG_DIR"/post/*.zsh(N); do
+    source "$zsh_config_file"
+  done
+fi
+
+[[ -r "$ZSH_CONFIG_DIR/local.zsh" ]] && source "$ZSH_CONFIG_DIR/local.zsh"
+
+unset zsh_config_file

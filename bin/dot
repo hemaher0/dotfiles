@@ -1,0 +1,468 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SOURCE_DIR="${DOTFILES_SOURCE_DIR:-$ROOT_DIR/home}"
+
+usage() {
+  cat <<'EOF'
+Usage: dot <command>
+
+Commands:
+  bootstrap  Run the repository bootstrap script
+  apply      Apply the chezmoi source directory
+  packages   Run the detected platform package script
+  fonts      Install or update preferred terminal fonts
+  tools      Install or update prebuilt user-local CLI tools
+  zsh-plugins  Install or update Antidote-managed zsh plugins
+  nvim       Install or update Neovim plugins
+  doctor [--fix]  Check local requirements and optionally install missing setup
+  update     Update the repository, then apply configuration
+  help       Show this help
+EOF
+}
+
+has_command() {
+  if [ -x "$1" ] && case "$1" in */*) true ;; *) false ;; esac; then
+    return 0
+  fi
+
+  command -v "$1" >/dev/null 2>&1
+}
+
+log() {
+  printf '%s\n' "dotfiles: $*"
+}
+
+is_wsl() {
+  [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease
+}
+
+is_termux() {
+  [ -n "${PREFIX:-}" ] && has_command pkg
+}
+
+resolve_chezmoi() {
+  if [ -n "${CHEZMOI:-}" ]; then
+    printf '%s\n' "$CHEZMOI"
+  elif has_command chezmoi; then
+    printf '%s\n' "chezmoi"
+  elif [ -x "$ROOT_DIR/.local/bin/chezmoi" ]; then
+    printf '%s\n' "$ROOT_DIR/.local/bin/chezmoi"
+  else
+    printf '%s\n' "chezmoi"
+  fi
+}
+
+require_chezmoi() {
+  CHEZMOI=$(resolve_chezmoi)
+
+  if ! has_command "$CHEZMOI"; then
+    log "chezmoi is not installed"
+    exit 1
+  fi
+}
+
+apply_config() {
+  require_chezmoi
+
+  if [ ! -d "$SOURCE_DIR" ]; then
+    log "chezmoi source directory is not ready: $SOURCE_DIR"
+    return 0
+  fi
+
+  "$CHEZMOI" --source "$SOURCE_DIR" apply
+}
+
+refresh_user_path() {
+  for path_dir in "$HOME/.local/bin" "$HOME/bin"; do
+    if [ -d "$path_dir" ] && case ":${PATH:-}:" in *":$path_dir:"*) false ;; *) true ;; esac; then
+      PATH="$path_dir:${PATH:-}"
+      export PATH
+    fi
+  done
+}
+
+doctor_usage() {
+  cat <<'EOF'
+Usage: dot doctor [--fix]
+
+Checks the local dotfiles setup. With --fix, installs or syncs missing
+supported components using the repository scripts.
+EOF
+}
+
+mark_missing() {
+  log "missing: $1"
+  failed=1
+}
+
+mark_warning() {
+  log "warning: $1"
+}
+
+check_command_status() {
+  command_name=$1
+  install_group=$2
+
+  if has_command "$command_name"; then
+    log "ok: command $command_name"
+    return
+  fi
+
+  mark_missing "command $command_name"
+
+  case "$install_group" in
+    packages) need_packages=1 ;;
+    tools) need_tools=1 ;;
+    none) ;;
+  esac
+}
+
+check_file_status() {
+  file_path=$1
+  description=$2
+
+  if [ -r "$file_path" ]; then
+    log "ok: $description"
+  else
+    mark_missing "$description"
+    need_apply=1
+  fi
+}
+
+check_user_tool_status() {
+  command_name=$1
+  tool_path="$HOME/.local/bin/$command_name"
+
+  if has_command "$command_name"; then
+    log "ok: command $command_name"
+  elif [ -x "$tool_path" ]; then
+    mark_missing "command $command_name is installed but not on PATH: $tool_path"
+    need_apply=1
+  else
+    mark_missing "command $command_name"
+    if is_termux; then
+      need_packages=1
+    else
+      need_tools=1
+    fi
+  fi
+}
+
+check_fontconfig_font() {
+  font_name=$1
+
+  if fc-list 2>/dev/null | grep -qi "$font_name"; then
+    log "ok: font $font_name"
+  else
+    mark_missing "font $font_name"
+    need_fonts=1
+  fi
+}
+
+check_fonts_status() {
+  if is_termux; then
+    if [ -r "$HOME/.termux/font.ttf" ]; then
+      log "ok: Termux font file"
+    else
+      mark_missing "Termux font file"
+      need_fonts=1
+    fi
+    return
+  fi
+
+  if has_command fc-list; then
+    check_fontconfig_font "Red Hat Mono"
+    check_fontconfig_font "D2CodingLigature Nerd Font"
+  else
+    mark_missing "command fc-list"
+    need_packages=1
+    need_fonts=1
+  fi
+
+  if has_command wezterm; then
+    wezterm_fonts=$(wezterm ls-fonts 2>/dev/null || true)
+    if printf '%s\n' "$wezterm_fonts" | grep -q "Red Hat Mono" \
+      && printf '%s\n' "$wezterm_fonts" | grep -q "D2CodingLigature Nerd Font"; then
+      log "ok: WezTerm font fallback"
+    else
+      mark_warning "WezTerm did not report both preferred fonts"
+    fi
+  fi
+}
+
+check_zsh_plugins_status() {
+  antidote_dir="${ANTIDOTE_DIR:-${ZDOTDIR:-$HOME}/.antidote}"
+  antidote_home="${ANTIDOTE_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/antidote}"
+
+  if [ -r "$antidote_dir/antidote.zsh" ]; then
+    log "ok: Antidote script"
+  else
+    mark_missing "Antidote script"
+    need_zsh_plugins=1
+  fi
+
+  check_file_status "$HOME/.config/zsh/plugins.txt" "zsh plugin manifest"
+
+  for bundle in \
+    github.com/romkatv/powerlevel10k \
+    github.com/wfxr/forgit \
+    github.com/jeffreytse/zsh-vi-mode
+  do
+    if [ -d "$antidote_home/$bundle" ]; then
+      log "ok: zsh bundle $bundle"
+    else
+      mark_missing "zsh bundle $bundle"
+      need_zsh_plugins=1
+    fi
+  done
+}
+
+check_nvim_plugins_status() {
+  nvim_lazy_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+
+  for plugin in \
+    lazy.nvim \
+    smart-splits.nvim \
+    blink.cmp \
+    neo-tree.nvim \
+    nvim-treesitter \
+    mason.nvim
+  do
+    if [ -d "$nvim_lazy_dir/$plugin" ]; then
+      log "ok: Neovim plugin $plugin"
+    else
+      mark_missing "Neovim plugin $plugin"
+      need_nvim_plugins=1
+    fi
+  done
+}
+
+check_wezterm_status() {
+  if ! has_command wezterm; then
+    mark_warning "wezterm command is not installed in this environment"
+    return
+  fi
+
+  log "ok: command wezterm"
+
+  if wezterm cli adjust-pane-size --help >/dev/null 2>&1; then
+    log "ok: WezTerm pane resize CLI"
+  else
+    mark_missing "WezTerm pane resize CLI"
+  fi
+
+  if wezterm show-keys --lua >/dev/null 2>&1; then
+    log "ok: WezTerm config loads"
+  else
+    mark_missing "WezTerm config loads"
+  fi
+}
+
+doctor_check() {
+  failed=0
+  need_apply=0
+  need_fonts=0
+  need_nvim_plugins=0
+  need_packages=0
+  need_tools=0
+  need_zsh_plugins=0
+  CHEZMOI=$(resolve_chezmoi)
+
+  check_command_status git packages
+  check_command_status "$CHEZMOI" packages
+  check_command_status zsh packages
+  check_command_status nvim packages
+
+  if has_command curl || has_command wget; then
+    log "ok: curl or wget"
+  else
+    mark_missing "curl or wget"
+    need_packages=1
+  fi
+
+  if [ -d "$SOURCE_DIR" ]; then
+    log "ok: chezmoi source $SOURCE_DIR"
+  else
+    mark_missing "chezmoi source $SOURCE_DIR"
+  fi
+
+  check_file_status "$HOME/.zshrc" "managed zshrc"
+  check_file_status "$HOME/.zshenv" "managed zshenv"
+  check_file_status "$HOME/.p10k.zsh" "Powerlevel10k config"
+  check_file_status "$HOME/.config/nvim/init.lua" "managed Neovim config"
+  check_file_status "$HOME/.config/wezterm/wezterm.lua" "managed WezTerm config"
+
+  check_user_tool_status zoxide
+  check_user_tool_status direnv
+  check_zsh_plugins_status
+  check_nvim_plugins_status
+  check_wezterm_status
+  check_fonts_status
+}
+
+doctor_fix() {
+  if [ "$need_packages" -eq 1 ]; then
+    log "fix: running platform package setup"
+    run_packages
+  fi
+
+  CHEZMOI=$(resolve_chezmoi)
+
+  if [ "$need_apply" -eq 1 ]; then
+    if has_command "$CHEZMOI"; then
+      log "fix: applying chezmoi source"
+      apply_config
+      refresh_user_path
+    else
+      mark_warning "skipping chezmoi apply because chezmoi is unavailable"
+    fi
+  fi
+
+  if [ "$need_fonts" -eq 1 ]; then
+    log "fix: installing bundled fonts"
+    run_fonts install
+  fi
+
+  if [ "$need_tools" -eq 1 ]; then
+    log "fix: installing user-local tools"
+    run_tools install
+    refresh_user_path
+  fi
+
+  if [ "$need_zsh_plugins" -eq 1 ]; then
+    log "fix: installing Antidote"
+    run_zsh_plugins install
+
+    if [ -r "$HOME/.config/zsh/plugins.txt" ]; then
+      log "fix: syncing zsh bundles"
+      run_zsh_plugins update
+    fi
+  fi
+
+  if [ "$need_nvim_plugins" -eq 1 ]; then
+    if has_command nvim; then
+      log "fix: installing Neovim plugins"
+      run_nvim install
+    else
+      mark_warning "skipping Neovim plugin install because nvim is unavailable"
+    fi
+  fi
+}
+
+doctor() {
+  fix=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --fix|fix)
+        fix=1
+        ;;
+      help|-h|--help)
+        doctor_usage
+        return 0
+        ;;
+      *)
+        doctor_usage
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  doctor_check
+
+  if [ "$fix" -eq 1 ] && [ "$failed" -ne 0 ]; then
+    doctor_fix
+    doctor_check
+  fi
+
+  return "$failed"
+}
+
+run_packages() {
+  if [ -n "${PREFIX:-}" ] && has_command pkg; then
+    "$ROOT_DIR/packages/termux.sh" "$@"
+  elif [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease; then
+    "$ROOT_DIR/packages/wsl.sh" "$@"
+  elif [ "$(uname -s)" = "Linux" ]; then
+    "$ROOT_DIR/packages/ubuntu.sh" "$@"
+  else
+    log "no package script is available for this platform"
+    exit 1
+  fi
+}
+
+run_zsh_plugins() {
+  "$ROOT_DIR/scripts/install-antidote.sh" "$@"
+}
+
+run_fonts() {
+  if [ "$(uname -s)" = "Linux" ] || [ -n "${PREFIX:-}" ]; then
+    "$ROOT_DIR/scripts/install-fonts.sh" "$@"
+  else
+    log "no font script is available for this platform"
+    exit 1
+  fi
+}
+
+run_tools() {
+  "$ROOT_DIR/scripts/install-user-tools.sh" "$@"
+}
+
+run_nvim() {
+  "$ROOT_DIR/scripts/install-neovim-plugins.sh" "$@"
+}
+
+update_repo() {
+  if ! has_command git; then
+    log "git is required for update"
+    exit 1
+  fi
+
+  git -C "$ROOT_DIR" pull --ff-only
+  apply_config
+}
+
+command_name="${1:-help}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$command_name" in
+  bootstrap)
+    "$ROOT_DIR/bootstrap.sh"
+    ;;
+  apply)
+    apply_config
+    ;;
+  packages)
+    run_packages "$@"
+    ;;
+  fonts)
+    run_fonts "$@"
+    ;;
+  tools)
+    run_tools "$@"
+    ;;
+  zsh-plugins)
+    run_zsh_plugins "$@"
+    ;;
+  nvim)
+    run_nvim "$@"
+    ;;
+  doctor)
+    doctor "$@"
+    ;;
+  update)
+    update_repo
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
