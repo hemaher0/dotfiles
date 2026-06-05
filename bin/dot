@@ -642,10 +642,44 @@ component_status_fields() {
     "$method" "$current" "$policy" "$relation" "$action_kind" "$action_target"
 }
 
-component_rows() {
+component_base_rows() {
   component_registry | while IFS='|' read -r category group scope component_id component_name method kind target; do
     component_status_fields "$category" "$group" "$scope" "$component_id" "$component_name" "$method" "$kind" "$target"
   done
+}
+
+component_all_install_row() {
+  base_rows=$(component_base_rows)
+  missing_count=0
+
+  while IFS='|' read -r status category group scope component_id component_name method current policy relation action_kind action_target; do
+    [ -n "$status" ] || continue
+
+    case "$status" in
+      missing|unknown)
+        missing_count=$((missing_count + 1))
+        ;;
+    esac
+  done <<EOF
+$base_rows
+EOF
+
+  if [ "$missing_count" -eq 0 ]; then
+    status=ok
+    current="all present"
+  else
+    status=missing
+    current="$missing_count need action"
+  fi
+
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    "$status" "all" "setup" "local" "all-install" "complete dotfiles setup" \
+    "installer" "$current" "-" "-" "install" "all-install"
+}
+
+component_rows() {
+  component_all_install_row
+  component_base_rows
 }
 
 component_status_row() {
@@ -684,6 +718,11 @@ component_status_table() {
 component_row() {
   component_id=$1
 
+  if [ "$component_id" = "all-install" ]; then
+    printf '%s\n' "all|setup|local|all-install|complete dotfiles setup|installer|aggregate|all"
+    return 0
+  fi
+
   component_registry | awk -F '|' -v component_id="$component_id" '
     $4 == component_id {
       print
@@ -710,6 +749,7 @@ component_status_row_by_id() {
 }
 
 list_component_ids() {
+  printf '%s\n' "all-install"
   component_registry | awk -F '|' '{ print $4 }'
 }
 
@@ -804,175 +844,238 @@ managed_component_action() {
   return 1
 }
 
-install_component() {
-  component_id=$1
-  component_row=$(component_row "$component_id")
-  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
-$component_row
-EOF
-  executor_target=$(component_executor_target "$component_id" "$target")
+run_all_component_action() {
+  action_name=$1
+  component_id=$2
 
-  if [ "$category" = "plugin" ] && [ "$kind" != "group" ]; then
-    managed_component_action install "$component_id" "$group"
-    return
-  fi
+  case "$action_name" in
+    install)
+      install_setup
+      ;;
+    *)
+      unsupported_component_action "$action_name" "$component_id"
+      ;;
+  esac
+}
 
-  case "$category:$group:$scope" in
-    repo:git:local)
+run_repo_component_action() {
+  action_name=$1
+  component_id=$2
+
+  case "$action_name" in
+    install|update)
       pull_repository
       ;;
-    package:system:system|dependency:system:system)
+    *)
+      unsupported_component_action "$action_name" "$component_id"
+      ;;
+  esac
+}
+
+run_package_like_component_action() {
+  action_name=$1
+  component_id=$2
+  group=$3
+  scope=$4
+  target=$5
+  executor_target=$(component_executor_target "$component_id" "$target")
+
+  case "$action_name:$group:$scope" in
+    install:system:system)
       run_packages install
       ;;
-    package:*:local|dependency:*:local)
+    update:system:system)
+      run_packages upgrade
+      ;;
+    install:*:local)
       run_user_package_component "$executor_target"
       refresh_user_path
       ;;
-    tool:user-bin:local)
-      run_tools install "$target"
-      refresh_user_path
-      ;;
-    config:*:local)
-      sync_component "$component_id"
-      ;;
-    plugin:zsh:local)
-      install_zsh_setup
-      ;;
-    plugin:nvim:local)
-      install_nvim_setup
-      ;;
-    plugin:tmux:local)
-      install_tmux_setup
-      sync_tmux_config
-      ;;
-    font:fontconfig:local)
-      run_fonts install
-      ;;
-    *)
-      unsupported_component_action install "$component_id"
-      ;;
-  esac
-}
-
-update_component() {
-  component_id=$1
-  component_row=$(component_row "$component_id")
-  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
-$component_row
-EOF
-  executor_target=$(component_executor_target "$component_id" "$target")
-
-  if [ "$category" = "plugin" ] && [ "$kind" != "group" ]; then
-    managed_component_action update "$component_id" "$group"
-    return
-  fi
-
-  case "$category:$group:$scope" in
-    repo:git:local)
-      pull_repository
-      ;;
-    package:system:system|dependency:system:system)
-      run_packages upgrade
-      ;;
-    package:*:local|dependency:*:local)
+    update:*:local)
       run_forced_user_package_component "$executor_target"
       refresh_user_path
       ;;
-    tool:user-bin:local)
-      run_tools update "$target"
-      refresh_user_path
-      ;;
-    config:*:local)
-      sync_component "$component_id"
-      ;;
-    plugin:zsh:local)
-      update_zsh_setup
-      ;;
-    plugin:nvim:local)
-      update_nvim_setup
-      ;;
-    plugin:tmux:local)
-      update_tmux_setup
-      ;;
-    font:fontconfig:local)
-      run_fonts update
+    build:source:local)
+      run_forced_user_package_component "$executor_target"
       ;;
     *)
-      unsupported_component_action update "$component_id"
+      unsupported_component_action "$action_name" "$component_id"
       ;;
   esac
 }
 
-sync_component() {
-  component_id=$1
-  component_row=$(component_row "$component_id")
-  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
-$component_row
-EOF
+run_tool_component_action() {
+  action_name=$1
+  component_id=$2
+  target=$3
 
-  if [ "$category" != "config" ]; then
-    log "sync is only supported for config components: $component_id"
-    return 1
-  fi
+  case "$action_name" in
+    install|update)
+      run_tools "$action_name" "$target"
+      refresh_user_path
+      ;;
+    *)
+      unsupported_component_action "$action_name" "$component_id"
+      ;;
+  esac
+}
 
-  case "$category:$group" in
-    config:tmux)
+run_config_component_action() {
+  action_name=$1
+  component_id=$2
+  group=$3
+
+  case "$action_name:$group" in
+    install:tmux|update:tmux|sync:tmux)
       sync_tmux_config
       refresh_user_path
       ;;
-    config:chezmoi)
+    install:chezmoi|update:chezmoi|sync:chezmoi)
       sync_config
       refresh_user_path
       ;;
     *)
-      unsupported_component_action sync "$component_id"
+      unsupported_component_action "$action_name" "$component_id"
       ;;
   esac
 }
 
-build_component() {
-  component_id=$1
-  component_row=$(component_row "$component_id")
-  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
-$component_row
-EOF
-  executor_target=$(component_executor_target "$component_id" "$target")
+run_plugin_component_action() {
+  action_name=$1
+  component_id=$2
+  group=$3
+  kind=$4
 
-  case "$category:$group:$scope" in
-    package:source:local|dependency:source:local)
-      run_forced_user_package_component "$executor_target"
+  if [ "$kind" != "group" ]; then
+    managed_component_action "$action_name" "$component_id" "$group"
+    return
+  fi
+
+  case "$action_name:$group" in
+    install:zsh)
+      install_zsh_setup
+      ;;
+    update:zsh)
+      update_zsh_setup
+      ;;
+    install:nvim)
+      install_nvim_setup
+      ;;
+    update:nvim)
+      update_nvim_setup
+      ;;
+    install:tmux)
+      install_tmux_setup
+      sync_tmux_config
+      ;;
+    update:tmux)
+      update_tmux_setup
+      ;;
+    sync:*)
+      log "sync is only supported for config components: $component_id"
+      return 1
       ;;
     *)
-      unsupported_component_action build "$component_id"
+      unsupported_component_action "$action_name" "$component_id"
       ;;
   esac
+}
+
+run_font_component_action() {
+  action_name=$1
+  component_id=$2
+
+  case "$action_name" in
+    install|update)
+      run_fonts "$action_name"
+      ;;
+    *)
+      unsupported_component_action "$action_name" "$component_id"
+      ;;
+  esac
+}
+
+run_component_category_action() {
+  action_name=$1
+  category=$2
+  group=$3
+  scope=$4
+  component_id=$5
+  kind=$6
+  target=$7
+
+  case "$category" in
+    all)
+      run_all_component_action "$action_name" "$component_id"
+      ;;
+    repo)
+      run_repo_component_action "$action_name" "$component_id"
+      ;;
+    package|dependency)
+      run_package_like_component_action "$action_name" "$component_id" "$group" "$scope" "$target"
+      ;;
+    tool)
+      run_tool_component_action "$action_name" "$component_id" "$target"
+      ;;
+    config)
+      run_config_component_action "$action_name" "$component_id" "$group"
+      ;;
+    plugin)
+      run_plugin_component_action "$action_name" "$component_id" "$group" "$kind"
+      ;;
+    font)
+      run_font_component_action "$action_name" "$component_id"
+      ;;
+    *)
+      unsupported_component_action "$action_name" "$component_id"
+      ;;
+  esac
+}
+
+install_component() {
+  run_component_action install "$1"
+}
+
+update_component() {
+  run_component_action update "$1"
+}
+
+sync_component() {
+  run_component_action sync "$1"
+}
+
+build_component() {
+  run_component_action build "$1"
 }
 
 run_component_action() {
   action_name=$1
   component_id=$2
 
-  require_component_id "$component_id"
-
-  log "$action_name component: $component_id"
   case "$action_name" in
-    sync)
-      sync_component "$component_id"
-      ;;
-    install)
-      install_component "$component_id"
-      ;;
-    update)
-      update_component "$component_id"
-      ;;
-    build)
-      build_component "$component_id"
+    sync|install|update|build)
       ;;
     *)
       log "unknown update action: $action_name"
       return 1
       ;;
   esac
+
+  if ! component_row=$(component_row "$component_id"); then
+    log "unknown component id: $component_id"
+    log "known component ids:"
+    list_component_ids | sed 's/^/  /'
+    return 1
+  fi
+
+  IFS='|' read -r category group scope row_id component_name method kind target <<EOF
+$component_row
+EOF
+
+  log "$action_name component: $component_id"
+  if ! run_component_category_action "$action_name" "$category" "$group" "$scope" "$row_id" "$kind" "$target"; then
+    return 1
+  fi
 
   refresh_user_path
   log "component status"

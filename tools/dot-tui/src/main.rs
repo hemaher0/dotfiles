@@ -62,12 +62,11 @@ impl Component {
         if self.action_kind == "none" || self.action_target.is_empty() {
             "-".to_owned()
         } else {
-            format!("--{} {}", self.action_kind, self.action_target)
+            format!(
+                "bin/dot update --{} {}",
+                self.action_kind, self.action_target
+            )
         }
-    }
-
-    fn has_action(&self) -> bool {
-        self.action_kind != "none" && !self.action_target.is_empty()
     }
 }
 
@@ -75,6 +74,7 @@ struct App {
     repo_root: PathBuf,
     components: Vec<Component>,
     selected: usize,
+    scroll_offset: usize,
     log: Vec<String>,
 }
 
@@ -84,6 +84,7 @@ impl App {
             repo_root,
             components: Vec::new(),
             selected: 0,
+            scroll_offset: 0,
             log: Vec::new(),
         }
     }
@@ -98,6 +99,9 @@ impl App {
                 self.components = components;
                 if self.selected >= self.components.len() {
                     self.selected = self.components.len().saturating_sub(1);
+                }
+                if self.scroll_offset >= self.components.len() {
+                    self.scroll_offset = self.components.len().saturating_sub(1);
                 }
                 self.push_log("status refreshed");
             }
@@ -115,31 +119,68 @@ impl App {
         }
     }
 
+    fn page_up(&mut self, page_size: usize) {
+        self.selected = self.selected.saturating_sub(page_size.max(1));
+    }
+
+    fn page_down(&mut self, page_size: usize) {
+        if self.components.is_empty() {
+            return;
+        }
+
+        self.selected = (self.selected + page_size.max(1)).min(self.components.len() - 1);
+    }
+
+    fn ensure_selected_visible(&mut self, visible_rows: usize) {
+        let visible_rows = visible_rows.max(1);
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        } else if self.selected >= self.scroll_offset + visible_rows {
+            self.scroll_offset = self.selected + 1 - visible_rows;
+        }
+    }
+
     fn selected_component(&self) -> Option<&Component> {
         self.components.get(self.selected)
     }
 
     fn run_selected_action(&mut self) {
+        self.run_action_for_selected(None);
+    }
+
+    fn run_action_for_selected(&mut self, requested_action: Option<&str>) {
         let Some(component) = self.selected_component().cloned() else {
             self.push_log("no component selected");
             return;
         };
 
-        if !component.has_action() {
+        let action_kind = requested_action.unwrap_or(&component.action_kind);
+        let action_target = if requested_action.is_some() {
+            &component.id
+        } else {
+            &component.action_target
+        };
+
+        if action_kind == "none" || action_target.is_empty() {
             self.push_log(format!("no action for {}", component.id));
             return;
         }
 
-        let action_flag = format!("--{}", component.action_kind);
-        self.push_log(format!(
-            "running: bin/dot update {action_flag} {}",
-            component.action_target
-        ));
+        let action_flag = format!("--{action_kind}");
+        self.run_dot_command("update", &[&action_flag, action_target]);
+    }
+
+    fn run_dot_command(&mut self, command_name: &str, args: &[&str]) {
+        let rendered_args = if args.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", args.join(" "))
+        };
+        self.push_log(format!("running: bin/dot {command_name}{rendered_args}"));
 
         match Command::new(self.dot_path())
-            .arg("update")
-            .arg(action_flag)
-            .arg(&component.action_target)
+            .arg(command_name)
+            .args(args)
             .current_dir(&self.repo_root)
             .output()
         {
@@ -200,7 +241,7 @@ fn main() -> AppResult<()> {
     let mut terminal = TerminalGuard::new()?;
 
     loop {
-        terminal.terminal.draw(|frame| draw(frame, &app))?;
+        terminal.terminal.draw(|frame| draw(frame, &mut app))?;
 
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
@@ -212,8 +253,20 @@ fn main() -> AppResult<()> {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('r') => app.refresh(),
                     KeyCode::Enter => app.run_selected_action(),
+                    KeyCode::Char(' ') | KeyCode::Char('i') => {
+                        app.run_action_for_selected(Some("install"))
+                    }
+                    KeyCode::Char('s') => app.run_action_for_selected(Some("sync")),
+                    KeyCode::Char('u') => app.run_action_for_selected(Some("update")),
+                    KeyCode::Char('b') => app.run_action_for_selected(Some("build")),
                     KeyCode::Up | KeyCode::Char('k') => app.move_up(),
                     KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                    KeyCode::PageUp => {
+                        app.page_up(visible_table_rows(terminal.terminal.size()?.height))
+                    }
+                    KeyCode::PageDown => {
+                        app.page_down(visible_table_rows(terminal.terminal.size()?.height))
+                    }
                     _ => {}
                 }
             }
@@ -242,16 +295,26 @@ fn load_components(repo_root: &Path) -> AppResult<Vec<Component>> {
         .collect())
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
+fn visible_table_rows(total_height: u16) -> usize {
+    usize::from(total_height.saturating_sub(19).max(1))
+}
+
+fn table_visible_rows(table_height: u16) -> usize {
+    usize::from(table_height.saturating_sub(3).max(1))
+}
+
+fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(8),
-            Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Length(8),
         ])
         .split(frame.area());
+    let visible_rows = table_visible_rows(chunks[1].height);
+    app.ensure_selected_visible(visible_rows);
 
     let selected = app
         .selected_component()
@@ -266,33 +329,44 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         ),
         Span::raw("  "),
         Span::raw(format!("{} components", app.components.len())),
+        Span::raw(format!(
+            "  rows: {}-{}",
+            app.scroll_offset.saturating_add(1),
+            (app.scroll_offset + visible_rows).min(app.components.len())
+        )),
         Span::raw("  selected: "),
         Span::styled(selected, Style::default().fg(Color::Yellow)),
     ]))
     .block(Block::default().borders(Borders::ALL).title("Ratatui"));
     frame.render_widget(header, chunks[0]);
 
-    let rows = app.components.iter().enumerate().map(|(index, component)| {
-        let mut style = status_style(&component.status);
-        if index == app.selected {
-            style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
-        }
+    let rows = app
+        .components
+        .iter()
+        .enumerate()
+        .skip(app.scroll_offset)
+        .take(visible_rows)
+        .map(|(index, component)| {
+            let mut style = status_style(&component.status);
+            if index == app.selected {
+                style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+            }
 
-        Row::new(vec![
-            Cell::from(component.status.clone()),
-            Cell::from(component.category.clone()),
-            Cell::from(component.group.clone()),
-            Cell::from(component.scope.clone()),
-            Cell::from(component.id.clone()),
-            Cell::from(component.name.clone()),
-            Cell::from(component.method.clone()),
-            Cell::from(empty_dash(&component.current)),
-            Cell::from(empty_dash(&component.policy)),
-            Cell::from(empty_dash(&component.relation)),
-            Cell::from(component.action_label()),
-        ])
-        .style(style)
-    });
+            Row::new(vec![
+                Cell::from(component.status.clone()),
+                Cell::from(component.category.clone()),
+                Cell::from(component.group.clone()),
+                Cell::from(component.scope.clone()),
+                Cell::from(component.id.clone()),
+                Cell::from(component.name.clone()),
+                Cell::from(component.method.clone()),
+                Cell::from(empty_dash(&component.current)),
+                Cell::from(empty_dash(&component.policy)),
+                Cell::from(empty_dash(&component.relation)),
+                Cell::from(component.action_label()),
+            ])
+            .style(style)
+        });
 
     let table = Table::new(
         rows,
@@ -333,8 +407,14 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     .block(Block::default().borders(Borders::ALL).title("Components"));
     frame.render_widget(table, chunks[1]);
 
-    let help = Paragraph::new("Up/Down or j/k: move  Enter: run action  r: refresh  q/Esc: quit")
-        .block(Block::default().borders(Borders::ALL).title("Keys"));
+    let selected_action = app
+        .selected_component()
+        .map(Component::action_label)
+        .unwrap_or_else(|| "-".to_owned());
+    let help = Paragraph::new(format!(
+        "j/k or Up/Down: move  PgUp/PgDn: page  Enter: row action  Space/i: install\ns: sync  u: update  b: build  r: refresh  q/Esc: quit\nselected action: {selected_action}"
+    ))
+    .block(Block::default().borders(Borders::ALL).title("Keys"));
     frame.render_widget(help, chunks[2]);
 
     let log_text = app
