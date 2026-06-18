@@ -1,4 +1,5 @@
 references/
 .local/
+.dev/
 .nvimlog
 target/

@@ -3,6 +3,9 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SOURCE_DIR="${DOTFILES_SOURCE_DIR:-$ROOT_DIR/home}"
+DEV_DIR="$ROOT_DIR/.dev"
+DEV_CONFIG="$ROOT_DIR/.local/dev.json"
+DEFAULT_DEV_REF="dev"
 
 usage() {
   cat <<'EOF'
@@ -16,6 +19,8 @@ Commands:
   doctor [--fix]
              Check local requirements and optionally repair user setup
   sync       Sync the chezmoi source directory
+  dev-ref    Show or set the development Git ref
+  dev-apply  Apply validated .dev changes to this checkout
   bootstrap  Run the repository bootstrap script
   help       Show this help
 EOF
@@ -31,6 +36,133 @@ has_command() {
 
 log() {
   printf '%s\n' "dotfiles: $*"
+}
+
+dev_ref() {
+  if [ -n "${DOTFILES_DEV_REF:-}" ]; then
+    printf '%s\n' "$DOTFILES_DEV_REF"
+    return
+  fi
+
+  if [ -r "$DEV_CONFIG" ]; then
+    configured_ref=$(sed -n 's/.*"ref"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DEV_CONFIG" | sed -n '1p')
+    if [ -n "$configured_ref" ]; then
+      printf '%s\n' "$configured_ref"
+      return
+    fi
+    log "warning: ignoring invalid development ref config: $DEV_CONFIG" >&2
+  fi
+
+  printf '%s\n' "$DEFAULT_DEV_REF"
+}
+
+set_dev_ref() {
+  ref=$1
+
+  if [ -z "$ref" ]; then
+    log "dev-ref requires a Git ref"
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$DEV_CONFIG")"
+  escaped_ref=$(printf '%s' "$ref" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  {
+    printf '{\n'
+    printf '  "ref": "%s"\n' "$escaped_ref"
+    printf '}\n'
+  } > "$DEV_CONFIG"
+
+  log "development ref set to $ref"
+}
+
+dev_ref_command() {
+  case "$#" in
+    0)
+      dev_ref
+      ;;
+    1)
+      set_dev_ref "$1"
+      ;;
+    *)
+      log "usage: dot dev-ref [git-ref]"
+      exit 1
+      ;;
+  esac
+}
+
+assert_git_root_clean() {
+  dirty=$(git -C "$ROOT_DIR" status --porcelain)
+  if [ -n "$dirty" ]; then
+    log "root checkout has changes; commit, stash, or remove them before dev-apply"
+    exit 1
+  fi
+}
+
+assert_dev_root() {
+  if [ ! -d "$DEV_DIR" ]; then
+    log "development root is missing: $DEV_DIR"
+    log "run: bin/dot-dev update --check"
+    exit 1
+  fi
+
+  if ! git -C "$DEV_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    log "development root is not a git worktree: $DEV_DIR"
+    exit 1
+  fi
+}
+
+resolve_repo_path() {
+  base=$1
+  relative_path=$2
+
+  case "$relative_path" in
+    /*|..|../*|*/..|*/../*)
+      log "refusing path outside repository: $relative_path"
+      exit 1
+      ;;
+  esac
+
+  printf '%s/%s\n' "$base" "$relative_path"
+}
+
+copy_dev_path_to_root() {
+  relative_path=$1
+  source_path=$(resolve_repo_path "$DEV_DIR" "$relative_path")
+  target_path=$(resolve_repo_path "$ROOT_DIR" "$relative_path")
+  mkdir -p "$(dirname "$target_path")"
+  cp -f "$source_path" "$target_path"
+}
+
+remove_root_path() {
+  relative_path=$1
+  target_path=$(resolve_repo_path "$ROOT_DIR" "$relative_path")
+  if [ -f "$target_path" ]; then
+    rm -f "$target_path"
+  fi
+}
+
+dev_apply() {
+  assert_dev_root
+  assert_git_root_clean
+
+  root_head=$(git -C "$ROOT_DIR" rev-parse HEAD)
+
+  git -C "$DEV_DIR" diff --name-only --diff-filter=D "$root_head" -- | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    log "remove: $path"
+    remove_root_path "$path"
+  done
+
+  {
+    git -C "$DEV_DIR" diff --name-only --diff-filter=ACMRT "$root_head" --
+    git -C "$DEV_DIR" ls-files --others --exclude-standard
+  } | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    log "apply: $path"
+    copy_dev_path_to_root "$path"
+  done
+
+  log "development changes applied to root checkout"
 }
 
 is_wsl() {
@@ -1703,6 +1835,16 @@ case "$command_name" in
         ;;
     esac
     sync_config
+    ;;
+  dev-ref)
+    dev_ref_command "$@"
+    ;;
+  dev-apply)
+    if [ "$#" -ne 0 ]; then
+      log "usage: dot dev-apply"
+      exit 1
+    fi
+    dev_apply
     ;;
   doctor)
     doctor "$@"

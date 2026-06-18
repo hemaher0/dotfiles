@@ -1,0 +1,105 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+DEV_DIR="$ROOT_DIR/.dev"
+DEV_CONFIG="$ROOT_DIR/.local/dev.json"
+DEFAULT_DEV_REF="dev"
+
+log() {
+  printf '%s\n' "dotfiles: $*"
+}
+
+has_command() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+dev_ref() {
+  if [ -n "${DOTFILES_DEV_REF:-}" ]; then
+    printf '%s\n' "$DOTFILES_DEV_REF"
+    return
+  fi
+
+  if [ -r "$DEV_CONFIG" ]; then
+    configured_ref=$(sed -n 's/.*"ref"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DEV_CONFIG" | sed -n '1p')
+    if [ -n "$configured_ref" ]; then
+      printf '%s\n' "$configured_ref"
+      return
+    fi
+    log "warning: ignoring invalid development ref config: $DEV_CONFIG" >&2
+  fi
+
+  printf '%s\n' "$DEFAULT_DEV_REF"
+}
+
+assert_git() {
+  if ! has_command git; then
+    log "git is required for development worktree setup"
+    exit 1
+  fi
+
+  if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    log "not a git repository: $ROOT_DIR"
+    exit 1
+  fi
+}
+
+is_git_worktree() {
+  path=$1
+  [ -d "$path" ] && git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+ref_exists() {
+  ref=$1
+  git -C "$ROOT_DIR" rev-parse --verify --quiet "$ref" >/dev/null 2>&1
+}
+
+dev_root_dirty() {
+  dirty=$(git -C "$DEV_DIR" status --porcelain)
+  [ -n "$dirty" ]
+}
+
+initialize_dev_worktree() {
+  ref=$1
+
+  assert_git
+
+  if [ -d "$DEV_DIR" ]; then
+    if ! is_git_worktree "$DEV_DIR"; then
+      log "development path exists but is not a git worktree: $DEV_DIR"
+      exit 1
+    fi
+
+    if dev_root_dirty; then
+      log "using existing dirty development root: $DEV_DIR"
+      return
+    fi
+
+    log "checking out development ref: $ref"
+    git -C "$DEV_DIR" checkout "$ref"
+    return
+  fi
+
+  if ref_exists "$ref"; then
+    log "creating development worktree at $DEV_DIR"
+    git -C "$ROOT_DIR" worktree add "$DEV_DIR" "$ref"
+  else
+    log "creating development branch and worktree: $ref"
+    git -C "$ROOT_DIR" worktree add -b "$ref" "$DEV_DIR" HEAD
+  fi
+}
+
+dev_ref_value=$(dev_ref)
+initialize_dev_worktree "$dev_ref_value"
+
+dev_dot="$DEV_DIR/bin/dot"
+if [ ! -f "$dev_dot" ]; then
+  log "development dot is missing: $dev_dot"
+  exit 1
+fi
+
+if [ -x "$dev_dot" ]; then
+  "$dev_dot" "$@"
+else
+  sh "$dev_dot" "$@"
+fi

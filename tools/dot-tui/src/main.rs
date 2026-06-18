@@ -3,7 +3,7 @@ use std::{
     error::Error,
     io::{self, Stdout},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::Duration,
 };
 
@@ -58,20 +58,83 @@ impl Component {
         })
     }
 
-    fn action_label(&self) -> String {
+    fn action_label(&self, command_display_name: &str) -> String {
         if self.action_kind == "none" || self.action_target.is_empty() {
             "-".to_owned()
         } else {
             format!(
-                "bin/dot update --{} {}",
-                self.action_kind, self.action_target
+                "{} update --{} {}",
+                command_display_name, self.action_kind, self.action_target
             )
         }
     }
 }
 
+#[derive(Clone, Debug)]
+struct DotCommand {
+    program: PathBuf,
+    prefix_args: Vec<String>,
+    display_name: String,
+}
+
+impl DotCommand {
+    fn resolve(repo_root: &Path) -> Self {
+        let shell_dot = repo_root.join("bin").join("dot");
+
+        if cfg!(windows) {
+            let powershell_dot = repo_root.join("bin").join("dot.ps1");
+            if powershell_dot.is_file() {
+                if let Some(shell) = find_powershell() {
+                    return Self {
+                        program: PathBuf::from(shell),
+                        prefix_args: vec![
+                            "-NoLogo".to_owned(),
+                            "-NoProfile".to_owned(),
+                            "-ExecutionPolicy".to_owned(),
+                            "Bypass".to_owned(),
+                            "-Command".to_owned(),
+                            powershell_script_command(&powershell_dot),
+                        ],
+                        display_name: "bin/dot.ps1".to_owned(),
+                    };
+                }
+            }
+
+            if command_available("sh") {
+                return Self {
+                    program: PathBuf::from("sh"),
+                    prefix_args: vec![shell_dot.to_string_lossy().into_owned()],
+                    display_name: "bin/dot".to_owned(),
+                };
+            }
+        }
+
+        Self {
+            program: shell_dot,
+            prefix_args: Vec::new(),
+            display_name: "bin/dot".to_owned(),
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.prefix_args);
+        command
+    }
+
+    fn render(&self, command_name: &str, args: &[&str]) -> String {
+        let mut rendered = format!("{} {}", self.display_name, command_name);
+        if !args.is_empty() {
+            rendered.push(' ');
+            rendered.push_str(&args.join(" "));
+        }
+        rendered
+    }
+}
+
 struct App {
     repo_root: PathBuf,
+    dot_command: DotCommand,
     components: Vec<Component>,
     selected: usize,
     scroll_offset: usize,
@@ -80,17 +143,15 @@ struct App {
 
 impl App {
     fn new(repo_root: PathBuf) -> Self {
+        let dot_command = DotCommand::resolve(&repo_root);
         Self {
             repo_root,
+            dot_command,
             components: Vec::new(),
             selected: 0,
             scroll_offset: 0,
             log: Vec::new(),
         }
-    }
-
-    fn dot_path(&self) -> PathBuf {
-        self.repo_root.join("bin").join("dot")
     }
 
     fn refresh(&mut self) {
@@ -171,14 +232,14 @@ impl App {
     }
 
     fn run_dot_command(&mut self, command_name: &str, args: &[&str]) {
-        let rendered_args = if args.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", args.join(" "))
-        };
-        self.push_log(format!("running: bin/dot {command_name}{rendered_args}"));
+        self.push_log(format!(
+            "running: {}",
+            self.dot_command.render(command_name, args)
+        ));
 
-        match Command::new(self.dot_path())
+        match self
+            .dot_command
+            .command()
             .arg(command_name)
             .args(args)
             .current_dir(&self.repo_root)
@@ -231,10 +292,40 @@ impl Drop for TerminalGuard {
 }
 
 fn main() -> AppResult<()> {
-    let repo_root = env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or(env::current_dir()?);
+    let mut dump = false;
+    let mut repo_root = None;
+
+    for arg in env::args().skip(1) {
+        if arg == "--dump" {
+            dump = true;
+        } else {
+            repo_root = Some(PathBuf::from(arg));
+        }
+    }
+
+    let repo_root = repo_root.unwrap_or(env::current_dir()?);
+
+    if dump {
+        for component in load_components(&repo_root)? {
+            println!(
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                component.status,
+                component.category,
+                component.group,
+                component.scope,
+                component.id,
+                component.name,
+                component.method,
+                component.current,
+                component.policy,
+                component.relation,
+                component.action_kind,
+                component.action_target
+            );
+        }
+        return Ok(());
+    }
+
     let mut app = App::new(repo_root);
     app.refresh();
 
@@ -277,7 +368,9 @@ fn main() -> AppResult<()> {
 }
 
 fn load_components(repo_root: &Path) -> AppResult<Vec<Component>> {
-    let output = Command::new(repo_root.join("bin").join("dot"))
+    let dot_command = DotCommand::resolve(repo_root);
+    let output = dot_command
+        .command()
         .arg("update")
         .arg("--raw")
         .current_dir(repo_root)
@@ -293,6 +386,40 @@ fn load_components(repo_root: &Path) -> AppResult<Vec<Component>> {
         .lines()
         .filter_map(Component::from_raw_line)
         .collect())
+}
+
+fn find_powershell() -> Option<&'static str> {
+    ["pwsh", "powershell"]
+        .into_iter()
+        .find(|shell| powershell_available(shell))
+}
+
+fn powershell_script_command(script_path: &Path) -> String {
+    format!(
+        "& '{}'",
+        script_path.to_string_lossy().replace('\'', "''")
+    )
+}
+
+fn powershell_available(shell: &str) -> bool {
+    Command::new(shell)
+        .arg("-NoLogo")
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg("$PSVersionTable.PSVersion.Major | Out-Null")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn command_available(command_name: &str) -> bool {
+    Command::new(command_name)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
 }
 
 fn visible_table_rows(total_height: u16) -> usize {
@@ -347,6 +474,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
         .skip(app.scroll_offset)
         .take(visible_rows)
         .map(|(index, component)| {
+            let command_display_name = app.dot_command.display_name.as_str();
             let mut style = status_style(&component.status);
             if index == app.selected {
                 style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
@@ -363,7 +491,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
                 Cell::from(empty_dash(&component.current)),
                 Cell::from(empty_dash(&component.policy)),
                 Cell::from(empty_dash(&component.relation)),
-                Cell::from(component.action_label()),
+                Cell::from(component.action_label(command_display_name)),
             ])
             .style(style)
         });
@@ -409,7 +537,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut App) {
 
     let selected_action = app
         .selected_component()
-        .map(Component::action_label)
+        .map(|component| component.action_label(&app.dot_command.display_name))
         .unwrap_or_else(|| "-".to_owned());
     let help = Paragraph::new(format!(
         "j/k or Up/Down: move  PgUp/PgDn: page  Enter: row action  Space/i: install\ns: sync  u: update  b: build  r: refresh  q/Esc: quit\nselected action: {selected_action}"
@@ -444,7 +572,7 @@ fn status_style(status: &str) -> Style {
     match status {
         "ok" => Style::default().fg(Color::Green),
         "missing" => Style::default().fg(Color::Red),
-        "unknown" => Style::default().fg(Color::Yellow),
+        "unknown" | "outdated" => Style::default().fg(Color::Yellow),
         _ => Style::default(),
     }
 }
