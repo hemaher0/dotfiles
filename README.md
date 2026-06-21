@@ -53,7 +53,8 @@ Set-Location $env:USERPROFILE\.dotfiles
 .\bin\dot.ps1 tui
 ```
 
-Windows bootstrap covers winget packages, chezmoi-managed files, bundled fonts, user tools, Neovim plugins, and WezTerm readiness. It does not configure zsh or tmux on Windows.
+Windows bootstrap covers winget packages, MSYS2 zsh, chezmoi-managed files, bundled fonts, user tools, zsh plugins, Neovim plugins, and WezTerm readiness. It does not configure tmux on Windows.
+It also installs `chezmoi` when missing before applying the managed files, so a fresh Windows setup should not require a separate `chezmoi` install step.
 
 Update the repository and check the Windows setup:
 
@@ -66,6 +67,8 @@ Check Windows component status, including the pinned PowerShell release target, 
 ```powershell
 .\bin\dot.ps1 update --check
 .\bin\dot.ps1 update --update package-pwsh
+.\bin\dot.ps1 update --install package-zsh
+.\bin\dot.ps1 update --install plugin-zsh
 ```
 
 Use a separate development worktree when you want to validate changes before applying them to the real checkout:

@@ -6,6 +6,9 @@ end
 
 function M.sync(config, wezterm)
   if is_windows(wezterm) then
+    local user_profile = os.getenv("USERPROFILE") or ""
+    local msys2_zsh = user_profile .. "\\.local\\bin\\msys2-zsh.cmd"
+
     config.default_prog = { "pwsh.exe", "-NoLogo" }
     config.launch_menu = {
       {
@@ -19,6 +22,10 @@ function M.sync(config, wezterm)
           "-Command",
           'Start-Process pwsh -Verb RunAs -ArgumentList "-NoLogo"',
         },
+      },
+      {
+        label = "MSYS2 zsh",
+        args = { msys2_zsh },
       },
       {
         label = "Ubuntu",

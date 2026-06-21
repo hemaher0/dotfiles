@@ -18,6 +18,13 @@ scripts/install-antidote.sh update
 
 The script clones Antidote into `${ZDOTDIR:-$HOME}/.antidote` by default. It does not write `~/.zshrc`, change the login shell, or start zsh. Dotfiles remain managed by chezmoi.
 
+On native Windows, zsh runs inside MSYS2. Install or update that runtime and the Antidote bundles with:
+
+```powershell
+.\scripts\install-msys2-zsh.ps1
+.\scripts\install-msys2-zsh.ps1 update
+```
+
 ## Fonts
 
 Install or update bundled terminal fonts:

@@ -24,6 +24,12 @@ function Test-Command {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Invoke-GitRoot {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+
+    & git -c "safe.directory=$RootDir" -C $RootDir @Args
+}
+
 function Invoke-Check {
     if (-not (Test-Path -Path $BootstrapScript -PathType Leaf)) {
         Write-DotfilesLog "bootstrap script is missing: $BootstrapScript"
@@ -41,7 +47,7 @@ if (-not (Test-Command "git")) {
 }
 
 Write-DotfilesLog "updating repository"
-git -C $RootDir pull --ff-only
+Invoke-GitRoot pull --ff-only
 
 Write-DotfilesLog "checking setup"
 Invoke-Check

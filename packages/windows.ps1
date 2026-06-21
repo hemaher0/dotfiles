@@ -28,6 +28,41 @@ function Test-Command {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Get-LocalAppData {
+    if ($env:LOCALAPPDATA) {
+        return $env:LOCALAPPDATA
+    }
+
+    return Join-Path $HOME "AppData\Local"
+}
+
+function Update-ProcessPath {
+    $MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $KnownUserPaths = @(
+        (Join-Path (Get-LocalAppData) "Microsoft\WindowsApps"),
+        (Join-Path (Get-LocalAppData) "Microsoft\WinGet\Links")
+    )
+    $Seen = @{}
+    $PathParts = @()
+
+    foreach ($PathEntry in (@($MachinePath, $UserPath, $env:Path) + $KnownUserPaths)) {
+        foreach ($Part in ([string]$PathEntry -split ";")) {
+            if ([string]::IsNullOrWhiteSpace($Part)) {
+                continue
+            }
+
+            $Key = $Part.Trim().ToLowerInvariant()
+            if (-not $Seen.ContainsKey($Key)) {
+                $Seen[$Key] = $true
+                $PathParts += $Part.Trim()
+            }
+        }
+    }
+
+    $env:Path = $PathParts -join ";"
+}
+
 function Assert-Winget {
     if (-not (Test-Command "winget")) {
         Write-DotfilesLog "winget is required for this script"
@@ -38,8 +73,22 @@ function Assert-Winget {
 function Install-WingetPackage {
     param(
         [string]$Id,
-        [string]$Name
+        [string]$Name,
+        [string[]]$Commands = @(),
+        [string[]]$Paths = @()
     )
+
+    $CommandList = @($Commands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $PathList = @($Paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+    if ($CommandList.Count -gt 0 -or $PathList.Count -gt 0) {
+        $MissingCommands = @($CommandList | Where-Object { -not (Test-Command $_) })
+        $MissingPaths = @($PathList | Where-Object { -not (Test-Path -Path $_ -PathType Leaf) })
+        if ($MissingCommands.Count -eq 0 -and $MissingPaths.Count -eq 0) {
+            Write-DotfilesLog "already installed: $Name"
+            return
+        }
+    }
 
     Write-DotfilesLog "installing $Name"
     winget install --id $Id --exact --accept-package-agreements --accept-source-agreements
@@ -77,16 +126,17 @@ function Select-Packages {
 }
 
 $Packages = @(
-    @{ ComponentId = "package-git"; Id = "Git.Git"; Name = "Git" },
-    @{ ComponentId = "package-chezmoi"; Id = "twpayne.chezmoi"; Name = "chezmoi" },
-    @{ ComponentId = "package-nvim"; Id = "Neovim.Neovim"; Name = "Neovim" },
-    @{ ComponentId = "package-wezterm"; Id = "wez.wezterm"; Name = "WezTerm" },
-    @{ ComponentId = "package-ripgrep"; Id = "BurntSushi.ripgrep.MSVC"; Name = "ripgrep" },
-    @{ ComponentId = "package-fd"; Id = "sharkdp.fd"; Name = "fd" },
-    @{ ComponentId = "package-fzf"; Id = "junegunn.fzf"; Name = "fzf" },
-    @{ ComponentId = "package-eza"; Id = "eza-community.eza"; Name = "eza" },
-    @{ ComponentId = "dependency-rust"; Id = "Rustlang.Rustup"; Name = "Rustup" },
-    @{ ComponentId = "package-pwsh"; Id = "Microsoft.PowerShell"; Name = "PowerShell" }
+    @{ ComponentId = "package-git"; Id = "Git.Git"; Name = "Git"; Commands = @("git") },
+    @{ ComponentId = "package-chezmoi"; Id = "twpayne.chezmoi"; Name = "chezmoi"; Commands = @("chezmoi") },
+    @{ ComponentId = "package-msys2"; Id = "MSYS2.MSYS2"; Name = "MSYS2"; Paths = @("C:\msys64\usr\bin\pacman.exe") },
+    @{ ComponentId = "package-nvim"; Id = "Neovim.Neovim"; Name = "Neovim"; Commands = @("nvim") },
+    @{ ComponentId = "package-wezterm"; Id = "wez.wezterm"; Name = "WezTerm"; Commands = @("wezterm") },
+    @{ ComponentId = "package-ripgrep"; Id = "BurntSushi.ripgrep.MSVC"; Name = "ripgrep"; Commands = @("rg") },
+    @{ ComponentId = "package-fd"; Id = "sharkdp.fd"; Name = "fd"; Commands = @("fd") },
+    @{ ComponentId = "package-fzf"; Id = "junegunn.fzf"; Name = "fzf"; Commands = @("fzf") },
+    @{ ComponentId = "package-eza"; Id = "eza-community.eza"; Name = "eza"; Commands = @("eza") },
+    @{ ComponentId = "dependency-rust"; Id = "Rustlang.Rustup"; Name = "Rustup"; Commands = @("rustc", "cargo") },
+    @{ ComponentId = "package-pwsh"; Id = "Microsoft.PowerShell"; Name = "PowerShell"; Commands = @("pwsh") }
 )
 
 if ($Command -eq "help") {
@@ -94,12 +144,13 @@ if ($Command -eq "help") {
     exit 0
 }
 
+Update-ProcessPath
 Assert-Winget
 
 switch ($Command) {
     "install" {
         foreach ($Package in (Select-Packages $PackageId)) {
-            Install-WingetPackage -Id $Package.Id -Name $Package.Name
+            Install-WingetPackage -Id $Package.Id -Name $Package.Name -Commands $Package.Commands -Paths $Package.Paths
         }
         Write-DotfilesLog "Windows package setup complete"
     }

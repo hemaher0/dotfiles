@@ -29,6 +29,10 @@ if ($RemainingArgs) {
 }
 $PowerShellTargetVersion = [Version]"7.6.3"
 $PowerShellReleaseUrl = "https://github.com/PowerShell/PowerShell/releases/tag/v7.6.3"
+$Msys2Root = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { "C:\msys64" }
+$Msys2UsrBin = Join-Path $Msys2Root "usr\bin"
+$Msys2Pacman = Join-Path $Msys2UsrBin "pacman.exe"
+$Msys2Zsh = Join-Path $Msys2UsrBin "zsh.exe"
 
 if ($Raw) { $CommandArgs += "--raw" }
 if ($Check) { $CommandArgs += "--check" }
@@ -95,6 +99,33 @@ function Get-LocalAppData {
     return Join-Path $HOME "AppData\Local"
 }
 
+function Update-ProcessPath {
+    $MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $KnownUserPaths = @(
+        (Join-Path (Get-LocalAppData) "Microsoft\WindowsApps"),
+        (Join-Path (Get-LocalAppData) "Microsoft\WinGet\Links")
+    )
+    $Seen = @{}
+    $PathParts = @()
+
+    foreach ($PathEntry in (@($MachinePath, $UserPath, $env:Path) + $KnownUserPaths)) {
+        foreach ($Part in ([string]$PathEntry -split ";")) {
+            if ([string]::IsNullOrWhiteSpace($Part)) {
+                continue
+            }
+
+            $Key = $Part.Trim().ToLowerInvariant()
+            if (-not $Seen.ContainsKey($Key)) {
+                $Seen[$Key] = $true
+                $PathParts += $Part.Trim()
+            }
+        }
+    }
+
+    $env:Path = $PathParts -join ";"
+}
+
 function Get-DevRef {
     if (-not [string]::IsNullOrWhiteSpace($env:DOTFILES_DEV_REF)) {
         return $env:DOTFILES_DEV_REF
@@ -133,6 +164,18 @@ function Set-DevRef {
     Write-DotfilesLog "development ref set to $Ref"
 }
 
+function Invoke-GitRoot {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+
+    & git -c "safe.directory=$RootDir" -C $RootDir @Args
+}
+
+function Invoke-GitDev {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+
+    & git -c "safe.directory=$DevDir" -C $DevDir @Args
+}
+
 function Invoke-DevRefCommand {
     param([string[]]$Args)
 
@@ -151,7 +194,7 @@ function Invoke-DevRefCommand {
 }
 
 function Assert-GitRootClean {
-    $Dirty = & git -C $RootDir status --porcelain
+    $Dirty = Invoke-GitRoot status --porcelain
     if ($LASTEXITCODE -ne 0) {
         Write-DotfilesLog "failed to inspect root checkout"
         exit 1
@@ -170,7 +213,7 @@ function Assert-DevRoot {
         exit 1
     }
 
-    $IsRepo = & git -C $DevDir rev-parse --is-inside-work-tree 2>$null
+    $IsRepo = Invoke-GitDev rev-parse --is-inside-work-tree 2>$null
     if ($LASTEXITCODE -ne 0 -or $IsRepo -ne "true") {
         Write-DotfilesLog "development root is not a git worktree: $DevDir"
         exit 1
@@ -224,15 +267,15 @@ function Invoke-DevApply {
     Assert-DevRoot
     Assert-GitRootClean
 
-    $RootHead = & git -C $RootDir rev-parse HEAD
+    $RootHead = Invoke-GitRoot rev-parse HEAD
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($RootHead)) {
         Write-DotfilesLog "failed to resolve root HEAD"
         exit 1
     }
 
-    $Deleted = @(& git -C $DevDir diff --name-only --diff-filter=D $RootHead --)
-    $Changed = @(& git -C $DevDir diff --name-only --diff-filter=ACMRT $RootHead --)
-    $Untracked = @(& git -C $DevDir ls-files --others --exclude-standard)
+    $Deleted = @(Invoke-GitDev diff --name-only --diff-filter=D $RootHead --)
+    $Changed = @(Invoke-GitDev diff --name-only --diff-filter=ACMRT $RootHead --)
+    $Untracked = @(Invoke-GitDev ls-files --others --exclude-standard)
 
     foreach ($Path in $Deleted) {
         if (-not [string]::IsNullOrWhiteSpace($Path)) {
@@ -283,6 +326,25 @@ function Get-PowerShellVersion {
     return Get-CommandVersion "pwsh"
 }
 
+function Get-Msys2CommandVersion {
+    param([string]$Path)
+
+    if (-not (Test-Path -Path $Path -PathType Leaf)) {
+        return ""
+    }
+
+    try {
+        $Output = & $Path --version 2>$null
+        if ($LASTEXITCODE -eq 0 -and $Output) {
+            return (($Output | Select-Object -First 1) -replace "^[^0-9]*", "" -replace "[\s,].*$", "")
+        }
+    }
+    catch {
+    }
+
+    return "present"
+}
+
 function ConvertTo-VersionOrNull {
     param([string]$Value)
 
@@ -304,13 +366,13 @@ function Get-RepoVersion {
         return ""
     }
 
-    $IsRepo = & git -C $RootDir rev-parse --is-inside-work-tree 2>$null
+    $IsRepo = Invoke-GitRoot rev-parse --is-inside-work-tree 2>$null
     if ($LASTEXITCODE -ne 0 -or $IsRepo -ne "true") {
         return ""
     }
 
-    $Branch = & git -C $RootDir rev-parse --abbrev-ref HEAD 2>$null
-    $Sha = & git -C $RootDir rev-parse --short HEAD 2>$null
+    $Branch = Invoke-GitRoot rev-parse --abbrev-ref HEAD 2>$null
+    $Sha = Invoke-GitRoot rev-parse --short HEAD 2>$null
     if ($LASTEXITCODE -eq 0 -and $Branch -and $Sha) {
         return "$Branch@$Sha"
     }
@@ -406,6 +468,59 @@ function New-FileRow {
     return New-ComponentRow "missing" "config" "chezmoi" "local" $Id $Name "chezmoi" "" "-" "-" "sync" $ActionTarget
 }
 
+function New-Msys2Row {
+    if (Test-Path -Path $Msys2Pacman -PathType Leaf) {
+        return New-ComponentRow "ok" "package" "msys2" "system" "package-msys2" "MSYS2" "winget" "present"
+    }
+
+    return New-ComponentRow "missing" "package" "msys2" "system" "package-msys2" "MSYS2" "winget" "" "-" "-" "install" "package-msys2"
+}
+
+function New-Msys2ZshRow {
+    if (-not (Test-Path -Path $Msys2Pacman -PathType Leaf)) {
+        return New-ComponentRow "missing" "package" "msys2" "local" "package-zsh" "MSYS2 zsh" "pacman" "requires package-msys2" "-" "-" "install" "package-msys2"
+    }
+
+    if (Test-Path -Path $Msys2Zsh -PathType Leaf) {
+        return New-ComponentRow "ok" "package" "msys2" "local" "package-zsh" "MSYS2 zsh" "pacman" (Get-Msys2CommandVersion $Msys2Zsh)
+    }
+
+    return New-ComponentRow "missing" "package" "msys2" "local" "package-zsh" "MSYS2 zsh" "pacman" "" "-" "-" "install" "package-zsh"
+}
+
+function Get-ZshPluginRows {
+    $AntidoteScript = Join-Path $HOME ".antidote\antidote.zsh"
+    $AntidoteHome = Join-Path $HOME ".cache\antidote"
+    $Plugins = @(
+        @{ Id = "plugin-zsh-antidote"; Name = "Antidote"; Path = $AntidoteScript; Type = "file" },
+        @{ Id = "plugin-zsh-powerlevel10k"; Name = "zsh plugin: powerlevel10k"; Path = (Join-Path $AntidoteHome "github.com\romkatv\powerlevel10k"); Type = "dir" },
+        @{ Id = "plugin-zsh-forgit"; Name = "zsh plugin: forgit"; Path = (Join-Path $AntidoteHome "github.com\wfxr\forgit"); Type = "dir" },
+        @{ Id = "plugin-zsh-vi-mode"; Name = "zsh plugin: zsh-vi-mode"; Path = (Join-Path $AntidoteHome "github.com\jeffreytse\zsh-vi-mode"); Type = "dir" }
+    )
+
+    $Missing = 0
+    $Rows = @()
+    foreach ($Plugin in $Plugins) {
+        $PathType = if ($Plugin.Type -eq "file") { "Leaf" } else { "Container" }
+        if (Test-Path -Path $Plugin.Path -PathType $PathType) {
+            $Rows += New-ComponentRow "ok" "plugin" "zsh" "local" $Plugin.Id $Plugin.Name "antidote" "present"
+        }
+        else {
+            $Missing += 1
+            $Rows += New-ComponentRow "missing" "plugin" "zsh" "local" $Plugin.Id $Plugin.Name "antidote" "managed by plugin-zsh"
+        }
+    }
+
+    if ($Missing -eq 0) {
+        $GroupRow = New-ComponentRow "ok" "plugin" "zsh" "local" "plugin-zsh" "zsh plugins" "antidote" "$($Plugins.Count) present"
+    }
+    else {
+        $GroupRow = New-ComponentRow "missing" "plugin" "zsh" "local" "plugin-zsh" "zsh plugins" "antidote" "$Missing/$($Plugins.Count) missing" "-" "-" "install" "plugin-zsh"
+    }
+
+    return @($GroupRow) + $Rows
+}
+
 function New-DirRow {
     param(
         [string]$Category,
@@ -476,6 +591,8 @@ function Get-NvimPluginRows {
 }
 
 function Get-ComponentRows {
+    Update-ProcessPath
+
     $Chezmoi = Resolve-Chezmoi
     $Rows = @()
 
@@ -489,6 +606,8 @@ function Get-ComponentRows {
 
     $Rows += New-CommandRow "package" "system" "system" "package-git" "git" "package" @("git")
     $Rows += New-CommandRow "package" "system" "system" "package-chezmoi" "chezmoi" "package" @($Chezmoi)
+    $Rows += New-Msys2Row
+    $Rows += New-Msys2ZshRow
     $Rows += New-PowerShellRow
     $Rows += New-CommandRow "package" "system" "system" "package-nvim" "nvim" "package" @("nvim")
     $Rows += New-CommandRow "package" "system" "system" "package-wezterm" "WezTerm" "package" @("wezterm")
@@ -500,9 +619,15 @@ function Get-ComponentRows {
     $Rows += New-FileRow "config-nvim-windows" "Windows Neovim config" (Join-Path (Get-LocalAppData) "nvim\init.lua")
     $Rows += New-FileRow "config-wezterm" "managed WezTerm config" (Join-Path $HOME ".config\wezterm\wezterm.lua")
     $Rows += New-FileRow "config-wezterm-smart-splits" "WezTerm smart-splits config" (Join-Path $HOME ".config\wezterm\user\smart_splits.lua") "config-wezterm"
+    $Rows += New-FileRow "config-zshrc" "managed zshrc" (Join-Path $HOME ".zshrc")
+    $Rows += New-FileRow "config-zshenv" "managed zshenv" (Join-Path $HOME ".zshenv")
+    $Rows += New-FileRow "config-zsh-plugins" "zsh plugin manifest" (Join-Path $HOME ".config\zsh\plugins.txt")
+    $Rows += New-FileRow "config-msys2-zsh-launcher" "MSYS2 zsh launcher" (Join-Path $HOME ".local\bin\msys2-zsh.cmd")
+    $Rows += New-FileRow "config-msys2-zsh-shell-launcher" "MSYS2 zsh shell launcher" (Join-Path $HOME ".local\bin\msys2-zsh.sh")
 
     $Rows += New-FontRow "font-red-hat-mono" "Red Hat Mono" "RedHatMono-Regular.ttf"
     $Rows += New-FontRow "font-d2coding-ligature" "D2CodingLigature Nerd Font" "D2CodingLigatureNerdFont-Regular.ttf"
+    $Rows += Get-ZshPluginRows
     $Rows += Get-NvimPluginRows
 
     $MissingCount = @($Rows | Where-Object { $_.Status -eq "missing" -or $_.Status -eq "unknown" -or $_.Status -eq "outdated" }).Count
@@ -594,6 +719,12 @@ function Sync-DirectoryContents {
         }
     }
 
+    $TargetItem = Get-Item -Path $Target -ErrorAction SilentlyContinue
+    if ($TargetItem -and (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        Write-DotfilesLog "ok: $Description link"
+        return
+    }
+
     Write-DotfilesLog "syncing $Description"
     Get-ChildItem -Path $Source -Force | ForEach-Object {
         Copy-Item -Path $_.FullName -Destination $Target -Recurse -Force
@@ -607,9 +738,18 @@ function Sync-WindowsConfigPaths {
 }
 
 function Invoke-ChezmoiSync {
+    Update-ProcessPath
+
     $Chezmoi = Resolve-Chezmoi
     if (-not (Test-Command $Chezmoi)) {
-        Write-DotfilesLog "chezmoi is required for config sync"
+        Write-DotfilesLog "installing chezmoi for config sync"
+        Invoke-PackageAction "install" "package-chezmoi"
+        Update-ProcessPath
+        $Chezmoi = Resolve-Chezmoi
+    }
+
+    if (-not (Test-Command $Chezmoi)) {
+        Write-DotfilesLog "chezmoi is required for config sync and could not be installed"
         exit 1
     }
 
@@ -626,6 +766,7 @@ function Invoke-PackageAction {
     $PackageScript = Join-Path (Join-Path $RootDir "packages") "windows.ps1"
     $ScriptAction = if ($ActionName -eq "update") { "upgrade" } else { "install" }
     & $PackageScript $ScriptAction $ComponentId
+    Update-ProcessPath
 }
 
 function Invoke-ToolAction {
@@ -649,6 +790,14 @@ function Invoke-NvimPluginAction {
     & $NvimScript $ScriptAction
 }
 
+function Invoke-ZshAction {
+    param([string]$ActionName)
+
+    $ZshScript = Join-Path (Join-Path $RootDir "scripts") "install-msys2-zsh.ps1"
+    $ScriptAction = if ($ActionName -eq "update") { "update" } else { "install" }
+    & $ZshScript $ScriptAction
+}
+
 function Invoke-ComponentAction {
     param(
         [string]$ActionName,
@@ -659,10 +808,16 @@ function Invoke-ComponentAction {
 
     switch -Regex ($ComponentId) {
         "^all-install$" { & $BootstrapScript; break }
-        "^repo-dotfiles$" { git -C $RootDir pull --ff-only; break }
+        "^repo-dotfiles$" { Invoke-GitRoot pull --ff-only; break }
+        "^package-zsh$" { Invoke-ZshAction $ActionName; break }
         "^(package-|dependency-rust)" { Invoke-PackageAction $ActionName $ComponentId; break }
         "^tool-" { Invoke-ToolAction $ActionName; break }
         "^font-" { Invoke-FontAction; break }
+        "^plugin-zsh$" { Invoke-ChezmoiSync; Invoke-ZshAction $ActionName; break }
+        "^plugin-zsh-" {
+            Write-DotfilesLog "$ActionName is managed by group component: plugin-zsh"
+            exit 1
+        }
         "^plugin-nvim$" { Invoke-NvimPluginAction $ActionName; break }
         "^plugin-nvim-" {
             Write-DotfilesLog "$ActionName is managed by group component: plugin-nvim"
@@ -758,7 +913,7 @@ function Invoke-UpdateCommand {
             }
 
             Write-DotfilesLog "updating repository"
-            git -C $RootDir pull --ff-only
+            Invoke-GitRoot pull --ff-only
             Write-DotfilesLog "component status"
             Write-ComponentTable
         }

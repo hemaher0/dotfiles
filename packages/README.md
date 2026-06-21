@@ -8,7 +8,7 @@ These scripts are implementation details for the package setup used by `bin/dot 
 | --- | --- |
 | `ubuntu.sh` | Ubuntu and Ubuntu-like Linux environments with `apt-get`. |
 | `wsl.sh` | Ubuntu on WSL. Delegates to `ubuntu.sh` after verifying WSL. |
-| `windows.ps1` | Windows with `winget`. |
+| `windows.ps1` | Windows with `winget`, plus MSYS2 as the native Windows zsh runtime. |
 
 ## Usage
 
@@ -33,6 +33,8 @@ Run the Windows script:
 .\packages\windows.ps1 update
 .\packages\windows.ps1 upgrade
 ```
+
+Windows zsh is managed through MSYS2. `packages/windows.ps1` installs MSYS2 with `winget`, and `scripts/install-msys2-zsh.ps1` installs `zsh`, `git`, Antidote, and zsh bundles inside the MSYS2 runtime while keeping the managed dotfiles in the Windows user profile.
 
 `update` refreshes package indexes or sources. `upgrade` is limited to the baseline packages managed by this repository; it does not run full-system upgrade commands such as `apt upgrade`, `pkg upgrade`, or `winget upgrade --all`.
 

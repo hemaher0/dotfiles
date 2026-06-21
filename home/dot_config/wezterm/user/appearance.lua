@@ -42,9 +42,15 @@ function M.sync(config, wezterm)
     bottom = 2,
   }
 
-  config.front_end = "WebGpu"
+  if wezterm.target_triple:find("windows") then
+    config.front_end = "OpenGL"
+    config.enable_kitty_keyboard = false
+  else
+    config.front_end = "WebGpu"
+    config.enable_kitty_keyboard = true
+  end
+
   config.animation_fps = 60
-  config.enable_kitty_keyboard = true
   config.scrollback_lines = 10000
   config.default_cursor_style = "SteadyBlock"
   config.check_for_updates = false

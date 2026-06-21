@@ -9,6 +9,11 @@ $SourceDir = if ($env:DOTFILES_SOURCE_DIR) { $env:DOTFILES_SOURCE_DIR } else { J
 $RepoLocalDir = Join-Path (Join-Path $RootDir ".local") "bin"
 $RepoChezmoi = Join-Path $RepoLocalDir "chezmoi"
 $RepoChezmoiExe = Join-Path $RepoLocalDir "chezmoi.exe"
+$Msys2Root = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { "C:\msys64" }
+$Msys2UsrBin = Join-Path $Msys2Root "usr\bin"
+$Msys2Pacman = Join-Path $Msys2UsrBin "pacman.exe"
+$Msys2Zsh = Join-Path $Msys2UsrBin "zsh.exe"
+$Msys2Bash = Join-Path $Msys2UsrBin "bash.exe"
 
 function Write-DotfilesLog {
     param([string]$Message)
@@ -48,11 +53,28 @@ function Resolve-Chezmoi {
 function Update-ProcessPath {
     $MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $PathParts = @($MachinePath, $UserPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $KnownUserPaths = @(
+        (Join-Path (Get-LocalAppData) "Microsoft\WindowsApps"),
+        (Join-Path (Get-LocalAppData) "Microsoft\WinGet\Links")
+    )
+    $Seen = @{}
+    $PathParts = @()
 
-    if ($PathParts.Count -gt 0) {
-        $env:Path = $PathParts -join ";"
+    foreach ($PathEntry in (@($MachinePath, $UserPath, $env:Path) + $KnownUserPaths)) {
+        foreach ($Part in ([string]$PathEntry -split ";")) {
+            if ([string]::IsNullOrWhiteSpace($Part)) {
+                continue
+            }
+
+            $Key = $Part.Trim().ToLowerInvariant()
+            if (-not $Seen.ContainsKey($Key)) {
+                $Seen[$Key] = $true
+                $PathParts += $Part.Trim()
+            }
+        }
     }
+
+    $env:Path = $PathParts -join ";"
 }
 
 function Get-LocalAppData {
@@ -102,6 +124,18 @@ function Test-CommandStatus {
     Set-InstallNeed $InstallGroup
 }
 
+function Test-ChezmoiStatus {
+    $script:Chezmoi = Resolve-Chezmoi
+
+    if (Test-Command $script:Chezmoi) {
+        Write-DotfilesLog "ok: command chezmoi"
+        return
+    }
+
+    Mark-Missing "command chezmoi"
+    Set-InstallNeed "packages"
+}
+
 function Test-FileStatus {
     param(
         [string]$Path,
@@ -130,6 +164,63 @@ function Test-WindowsConfigFileStatus {
 
     Mark-Missing $Description
     $script:NeedWindowsConfigSync = $true
+}
+
+function Test-Msys2Status {
+    if (Test-Path -Path $Msys2Pacman -PathType Leaf) {
+        Write-DotfilesLog "ok: MSYS2 pacman"
+    }
+    else {
+        Mark-Missing "MSYS2 pacman"
+        $script:NeedPackages = $true
+        return
+    }
+
+    if (Test-Path -Path $Msys2Zsh -PathType Leaf) {
+        $ZshVersion = & $Msys2Zsh --version 2>$null
+        if ($LASTEXITCODE -eq 0 -and $ZshVersion) {
+            Write-DotfilesLog "ok: MSYS2 $($ZshVersion | Select-Object -First 1)"
+        }
+        else {
+            Write-DotfilesLog "ok: MSYS2 zsh"
+        }
+    }
+    else {
+        Mark-Missing "MSYS2 zsh"
+        $script:NeedMsys2Zsh = $true
+    }
+}
+
+function Test-ZshPluginsStatus {
+    $AntidoteScript = Join-Path $HOME ".antidote\antidote.zsh"
+    $PluginFile = Join-Path $HOME ".config\zsh\plugins.txt"
+    $AntidoteHome = Join-Path $HOME ".cache\antidote"
+    $Bundles = @(
+        "github.com\romkatv\powerlevel10k",
+        "github.com\wfxr\forgit",
+        "github.com\jeffreytse\zsh-vi-mode"
+    )
+
+    if (Test-Path -Path $AntidoteScript -PathType Leaf) {
+        Write-DotfilesLog "ok: Antidote script"
+    }
+    else {
+        Mark-Missing "Antidote script"
+        $script:NeedZshPlugins = $true
+    }
+
+    Test-FileStatus -Path $PluginFile -Description "zsh plugin manifest"
+
+    foreach ($Bundle in $Bundles) {
+        $BundlePath = Join-Path $AntidoteHome $Bundle
+        if (Test-Path -Path $BundlePath -PathType Container) {
+            Write-DotfilesLog "ok: zsh bundle $Bundle"
+        }
+        else {
+            Mark-Missing "zsh bundle $Bundle"
+            $script:NeedZshPlugins = $true
+        }
+    }
 }
 
 function Sync-DirectoryContents {
@@ -258,23 +349,28 @@ function Test-WezTermStatus {
 }
 
 function Invoke-DoctorCheck {
+    Update-ProcessPath
+
     $script:Failed = $false
     $script:NeedSync = $false
     $script:NeedFonts = $false
     $script:NeedNvimPlugins = $false
     $script:NeedPackages = $false
     $script:NeedTools = $false
+    $script:NeedMsys2Zsh = $false
+    $script:NeedZshPlugins = $false
     $script:NeedWindowsConfigSync = $false
     $script:Chezmoi = Resolve-Chezmoi
 
     Test-CommandStatus -Name "git" -InstallGroup "packages"
-    Test-CommandStatus -Name $script:Chezmoi -InstallGroup "packages" -Label "chezmoi"
+    Test-ChezmoiStatus
     Test-CommandStatus -Name "pwsh" -InstallGroup "packages"
     Test-CommandStatus -Name "nvim" -InstallGroup "packages"
     Test-CommandStatus -Name "rustc" -InstallGroup "packages"
     Test-CommandStatus -Name "cargo" -InstallGroup "packages"
     Test-CommandStatus -Name "zoxide" -InstallGroup "tools"
     Test-CommandStatus -Name "direnv" -InstallGroup "tools"
+    Test-Msys2Status
 
     if (Test-Path -Path $SourceDir -PathType Container) {
         Write-DotfilesLog "ok: chezmoi source $SourceDir"
@@ -287,15 +383,22 @@ function Invoke-DoctorCheck {
     Test-FileStatus -Path (Join-Path $HOME ".config\nvim\lua\user\plugins\smart-splits.lua") -Description "Neovim smart-splits config"
     Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\wezterm.lua") -Description "managed WezTerm config"
     Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\user\smart_splits.lua") -Description "WezTerm smart-splits config"
+    Test-FileStatus -Path (Join-Path $HOME ".zshrc") -Description "managed zshrc"
+    Test-FileStatus -Path (Join-Path $HOME ".zshenv") -Description "managed zshenv"
+    Test-FileStatus -Path (Join-Path $HOME ".local\bin\msys2-zsh.cmd") -Description "MSYS2 zsh launcher"
+    Test-FileStatus -Path (Join-Path $HOME ".local\bin\msys2-zsh.sh") -Description "MSYS2 zsh shell launcher"
     Test-WindowsConfigFileStatus -Path (Join-Path (Get-LocalAppData) "nvim\init.lua") -Description "Windows Neovim config"
     Test-WindowsConfigFileStatus -Path (Join-Path (Get-LocalAppData) "nvim\lua\user\plugins\smart-splits.lua") -Description "Windows Neovim smart-splits config"
 
     Test-FontStatus
+    Test-ZshPluginsStatus
     Test-NeovimPluginsStatus
     Test-WezTermStatus
 }
 
 function Invoke-WindowsPackages {
+    param([string]$PackageId = "")
+
     $PackageScript = Join-Path (Join-Path $RootDir "packages") "windows.ps1"
 
     if (-not (Test-Path -Path $PackageScript -PathType Leaf)) {
@@ -309,15 +412,34 @@ function Invoke-WindowsPackages {
     }
 
     Write-DotfilesLog "fix: running Windows package setup"
-    & $PackageScript
+    & $PackageScript install $PackageId
     Update-ProcessPath
 }
 
-function Invoke-ChezmoiSync {
+function Ensure-ChezmoiAvailable {
+    Update-ProcessPath
     $script:Chezmoi = Resolve-Chezmoi
 
-    if (-not (Test-Command $script:Chezmoi)) {
-        Mark-Warning "skipping chezmoi sync because chezmoi is unavailable"
+    if (Test-Command $script:Chezmoi) {
+        return $true
+    }
+
+    Write-DotfilesLog "fix: installing chezmoi"
+    Invoke-WindowsPackages -PackageId "package-chezmoi"
+    Update-ProcessPath
+    $script:Chezmoi = Resolve-Chezmoi
+
+    if (Test-Command $script:Chezmoi) {
+        return $true
+    }
+
+    Mark-Missing "command chezmoi after package install"
+    return $false
+}
+
+function Invoke-ChezmoiSync {
+    if (-not (Ensure-ChezmoiAvailable)) {
+        Mark-Warning "skipping chezmoi sync because chezmoi is unavailable after install"
         return
     }
 
@@ -367,6 +489,18 @@ function Invoke-NeovimPluginsInstall {
     }
 }
 
+function Invoke-Msys2ZshInstall {
+    $ZshScript = Join-Path (Join-Path $RootDir "scripts") "install-msys2-zsh.ps1"
+
+    if (Test-Path -Path $ZshScript -PathType Leaf) {
+        Write-DotfilesLog "fix: installing MSYS2 zsh"
+        & $ZshScript install
+    }
+    else {
+        Mark-Missing "MSYS2 zsh install script"
+    }
+}
+
 function Invoke-DoctorFix {
     if ($script:NeedPackages) {
         Invoke-WindowsPackages
@@ -379,6 +513,10 @@ function Invoke-DoctorFix {
 
     if ($script:NeedWindowsConfigSync) {
         Sync-WindowsConfigPaths
+    }
+
+    if ($script:NeedMsys2Zsh -or $script:NeedZshPlugins) {
+        Invoke-Msys2ZshInstall
     }
 
     if ($script:NeedFonts) {
