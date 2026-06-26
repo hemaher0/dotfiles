@@ -17,6 +17,20 @@ if [[ -n "${PREFIX:-}" ]]; then
   prepend_path "$PREFIX/bin"
 fi
 
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then
+  prepend_path "/clang64/bin"
+  prepend_path "/mingw64/bin"
+  prepend_path "/ucrt64/bin"
+
+  append_path() {
+    [[ -d "$1" ]] && path+=("$1")
+  }
+
+  append_path "/usr/bin"
+  append_path "/bin"
+  unset -f append_path
+fi
+
 prepend_path "/opt/nvim-linux-x86_64/bin"
 prepend_path "/opt/nvim/bin"
 

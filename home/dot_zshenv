@@ -8,6 +8,22 @@ export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 export ZSH_CONFIG_DIR="${ZSH_CONFIG_DIR:-$XDG_CONFIG_HOME/zsh}"
 export ZSH_CACHE_DIR="${ZSH_CACHE_DIR:-$XDG_CACHE_HOME/zsh}"
 
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then
+  for msys_path in /clang64/bin /mingw64/bin /ucrt64/bin; do
+    if [[ -d "$msys_path" && ":${PATH:-}:" != *":$msys_path:"* ]]; then
+      export PATH="$msys_path:${PATH:-}"
+    fi
+  done
+
+  for msys_path in /usr/bin /bin; do
+    if [[ -d "$msys_path" && ":${PATH:-}:" != *":$msys_path:"* ]]; then
+      export PATH="${PATH:+$PATH:}$msys_path"
+    fi
+  done
+
+  unset msys_path
+fi
+
 if [[ ":${PATH:-}:" != *":$HOME/.local/bin:"* ]]; then
   export PATH="$HOME/.local/bin:${PATH:-}"
 fi

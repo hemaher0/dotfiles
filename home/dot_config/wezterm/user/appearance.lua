@@ -27,6 +27,7 @@ function M.sync(config, wezterm)
       "pwsh.exe",
       "cmd.exe",
       "ubuntu2404.exe",
+      "zsh.exe",
     }
   else
     config.skip_close_confirmation_for_processes_named = {
