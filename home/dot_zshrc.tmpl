@@ -16,6 +16,7 @@ export ANTIDOTE_HOME="${ANTIDOTE_HOME:-$XDG_CACHE_HOME/antidote}"
 export ANTIDOTE_DIR="${ANTIDOTE_DIR:-${ZDOTDIR:-$HOME}/.antidote}"
 export ANTIDOTE_SCRIPT="${ANTIDOTE_SCRIPT:-$ANTIDOTE_DIR/antidote.zsh}"
 export ZSH_PLUGIN_FILE="${ZSH_PLUGIN_FILE:-$ZSH_CONFIG_DIR/plugins.txt}"
+export ZSH_PLUGIN_BUNDLE="${ZSH_PLUGIN_BUNDLE:-$ZSH_CACHE_DIR/plugins.zsh}"
 
 if [[ -d "$ZSH_CONFIG_DIR/pre" ]]; then
   for zsh_config_file in "$ZSH_CONFIG_DIR"/pre/*.zsh(N); do
@@ -25,7 +26,23 @@ fi
 
 if [[ -r "$ANTIDOTE_SCRIPT" && -r "$ZSH_PLUGIN_FILE" ]]; then
   source "$ANTIDOTE_SCRIPT"
-  antidote load "$ZSH_PLUGIN_FILE"
+  mkdir -p "$ZSH_CACHE_DIR"
+
+  if [[ ! -s "$ZSH_PLUGIN_BUNDLE" || "$ZSH_PLUGIN_FILE" -nt "$ZSH_PLUGIN_BUNDLE" || "$ANTIDOTE_SCRIPT" -nt "$ZSH_PLUGIN_BUNDLE" ]]; then
+    zsh_plugin_bundle_tmp="${ZSH_PLUGIN_BUNDLE}.$$"
+    if antidote bundle < "$ZSH_PLUGIN_FILE" >| "$zsh_plugin_bundle_tmp"; then
+      mv -f "$zsh_plugin_bundle_tmp" "$ZSH_PLUGIN_BUNDLE"
+    else
+      rm -f "$zsh_plugin_bundle_tmp"
+    fi
+    unset zsh_plugin_bundle_tmp
+  fi
+
+  if [[ -s "$ZSH_PLUGIN_BUNDLE" ]]; then
+    source "$ZSH_PLUGIN_BUNDLE"
+  else
+    antidote load "$ZSH_PLUGIN_FILE"
+  fi
 else
   autoload -Uz compinit
   mkdir -p "$ZSH_CACHE_DIR"

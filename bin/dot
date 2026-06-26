@@ -216,7 +216,7 @@ sync_config() {
     return 1
   fi
 
-  "$CHEZMOI" --source "$SOURCE_DIR" apply
+  "$CHEZMOI" --source "$SOURCE_DIR" apply --force
 }
 
 sync_tmux_config() {
@@ -227,7 +227,7 @@ sync_tmux_config() {
     return 1
   fi
 
-  "$CHEZMOI" --source "$SOURCE_DIR" apply \
+  "$CHEZMOI" --source "$SOURCE_DIR" apply --force \
     "$HOME/.config/tmux/tmux.conf" \
     "$HOME/.config/tmux/tmux.conf.local"
 }
@@ -633,7 +633,7 @@ component_status_fields() {
   fi
 
   case "$component_id" in
-    plugin-nvim-*|plugin-zsh-*|plugin-tmux-*)
+    plugin-zsh-*|plugin-tmux-*)
       action_kind=none
       action_target=
       ;;
@@ -764,8 +764,21 @@ component_status_fields() {
         current="managed by $manager_id"
       fi
     fi
-    action_kind=none
-    action_target=
+
+    case "$group:$status" in
+      nvim:ok)
+        action_kind=none
+        action_target=
+        ;;
+      nvim:*)
+        action_kind=install
+        action_target=$component_id
+        ;;
+      *)
+        action_kind=none
+        action_target=
+        ;;
+    esac
   fi
   relation=$(component_relation "$component_id" "$current")
 
@@ -1079,7 +1092,17 @@ run_plugin_component_action() {
   kind=$4
 
   if [ "$kind" != "group" ]; then
-    managed_component_action "$action_name" "$component_id" "$group"
+    case "$action_name:$group" in
+      install:nvim)
+        install_nvim_setup "$component_id"
+        ;;
+      update:nvim)
+        update_nvim_setup "$component_id"
+        ;;
+      *)
+        managed_component_action "$action_name" "$component_id" "$group"
+        ;;
+    esac
     return
   fi
 
@@ -1119,7 +1142,7 @@ run_font_component_action() {
 
   case "$action_name" in
     install|update)
-      run_fonts "$action_name"
+      run_fonts "$action_name" "$component_id"
       ;;
     *)
       unsupported_component_action "$action_name" "$component_id"
@@ -1623,16 +1646,20 @@ update_zsh_setup() {
 }
 
 install_nvim_setup() {
+  plugin_id=${1:-all}
+
   if has_command nvim; then
-    run_nvim install
+    run_nvim install "$plugin_id"
   else
     mark_warning "skipping Neovim plugin install because nvim is unavailable"
   fi
 }
 
 update_nvim_setup() {
+  plugin_id=${1:-all}
+
   if has_command nvim; then
-    run_nvim update
+    run_nvim update "$plugin_id"
   else
     mark_warning "skipping Neovim plugin update because nvim is unavailable"
   fi

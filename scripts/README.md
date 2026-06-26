@@ -37,6 +37,7 @@ On Windows:
 
 ```powershell
 .\scripts\install-fonts.ps1
+.\scripts\install-fonts.ps1 install font-red-hat-mono
 ```
 
 The font scripts install bundled files from `assets/fonts` and do not download anything. Linux installs fonts into `~/.local/share/fonts/dotfiles` and refreshes `fontconfig`. WSL installs Windows fonts through PowerShell when possible, and also installs Linux fontconfig fonts when a local WSL `wezterm` binary is present.
@@ -51,7 +52,11 @@ scripts/install-user-tools.sh install zoxide
 scripts/install-user-tools.sh update direnv
 ```
 
-This installs `zoxide` and `direnv` from official release binaries into `~/.local/bin`. Windows uses winget package IDs for the same tools.
+This installs `zoxide` and `direnv` from official release binaries into `~/.local/bin`. Windows uses winget package IDs for the same tools:
+
+```powershell
+.\scripts\install-user-tools.ps1 install tool-zoxide
+```
 
 ## tmux
 
@@ -68,6 +73,7 @@ Install or update plugins for the default Neovim profile:
 
 ```sh
 scripts/install-neovim-plugins.sh
+scripts/install-neovim-plugins.sh install plugin-nvim-smart-splits
 ```
 
 Use `NVIM_APPNAME` to target another Neovim profile.

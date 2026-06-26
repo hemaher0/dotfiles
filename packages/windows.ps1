@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$PowerShellStableBuildInfoUrl = "https://aka.ms/pwsh-buildinfo-stable"
 
 function Write-DotfilesLog {
     param([string]$Message)
@@ -17,7 +18,7 @@ Usage: windows.ps1 [install|update|upgrade|help]
        windows.ps1 install|upgrade <package-id>
 
 Commands:
-  install  Install baseline packages with winget
+  install  Install baseline packages
   update   Update winget sources
   upgrade  Upgrade managed baseline packages only
 "@
@@ -90,8 +91,10 @@ function Install-WingetPackage {
         }
     }
 
+    Assert-Winget
     Write-DotfilesLog "installing $Name"
     winget install --id $Id --exact --accept-package-agreements --accept-source-agreements
+    Update-ProcessPath
 }
 
 function Upgrade-WingetPackage {
@@ -100,11 +103,167 @@ function Upgrade-WingetPackage {
         [string]$Name
     )
 
+    Assert-Winget
     Write-DotfilesLog "upgrading $Name"
     winget upgrade --id $Id --exact --accept-package-agreements --accept-source-agreements
 }
 
+function ConvertTo-VersionOrNull {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $null
+    }
+
+    $VersionText = ($Value -replace "^[^0-9]*", "" -replace "[^0-9.].*$", "")
+    try {
+        return [Version]$VersionText
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-PowerShellVersion {
+    if (-not (Test-Command "pwsh")) {
+        return ""
+    }
+
+    try {
+        $Output = & pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>$null
+        if ($LASTEXITCODE -eq 0 -and $Output) {
+            return ($Output | Select-Object -First 1).Trim()
+        }
+    }
+    catch {
+    }
+
+    return ""
+}
+
+function Get-PowerShellStableReleaseInfo {
+    try {
+        $Release = Invoke-RestMethod -Uri $PowerShellStableBuildInfoUrl -Headers @{ "User-Agent" = "dotfiles" } -ErrorAction Stop
+        $Tag = [string]$Release.ReleaseTag
+        if ([string]::IsNullOrWhiteSpace($Tag)) {
+            Write-DotfilesLog "PowerShell stable release metadata is missing ReleaseTag"
+            exit 1
+        }
+
+        $VersionText = $Tag -replace "^v", ""
+        $Version = ConvertTo-VersionOrNull $VersionText
+        if ($null -eq $Version) {
+            Write-DotfilesLog "PowerShell stable release metadata has invalid ReleaseTag: $Tag"
+            exit 1
+        }
+
+        return [PSCustomObject]@{
+            Tag = $Tag
+            VersionText = $VersionText
+            Version = $Version
+            ReleaseDate = [string]$Release.ReleaseDate
+        }
+    }
+    catch {
+        Write-DotfilesLog "failed to query PowerShell stable release metadata"
+        exit 1
+    }
+}
+
+function Test-PowerShellReleaseCurrent {
+    param([Version]$ReleaseVersion)
+
+    $Current = ConvertTo-VersionOrNull (Get-PowerShellVersion)
+    return $null -ne $Current -and $Current -ge $ReleaseVersion
+}
+
+function Get-PowerShellInstallerArchitecture {
+    $Architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+
+    switch ($Architecture) {
+        "x64" { return "x64" }
+        "arm64" { return "arm64" }
+        "x86" { return "x86" }
+        default {
+            Write-DotfilesLog "unsupported PowerShell installer architecture: $Architecture"
+            exit 1
+        }
+    }
+}
+
+function Install-PowerShellRelease {
+    param([string]$VersionText)
+
+    $Architecture = Get-PowerShellInstallerArchitecture
+    $AssetName = "PowerShell-$VersionText-win-$Architecture.msi"
+    $Url = "https://github.com/PowerShell/PowerShell/releases/download/v$VersionText/$AssetName"
+    $InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) $AssetName
+
+    if (-not (Test-Path -Path $InstallerPath -PathType Leaf)) {
+        Write-DotfilesLog "downloading PowerShell $VersionText from GitHub release"
+        Invoke-WebRequest -Uri $Url -OutFile $InstallerPath
+    }
+    else {
+        Write-DotfilesLog "using cached PowerShell installer: $InstallerPath"
+    }
+
+    try {
+        Write-DotfilesLog "installing PowerShell $VersionText from GitHub release"
+        $Process = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $InstallerPath, "/quiet", "/norestart") -Wait -PassThru
+        if ($Process.ExitCode -ne 0 -and $Process.ExitCode -ne 3010) {
+            Write-DotfilesLog "PowerShell MSI install failed with exit code $($Process.ExitCode)"
+            exit $Process.ExitCode
+        }
+
+        if ($Process.ExitCode -eq 3010) {
+            Write-DotfilesLog "PowerShell MSI install completed; restart may be required"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $InstallerPath -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-PowerShellReleaseCurrent (ConvertTo-VersionOrNull $VersionText))) {
+        Write-DotfilesLog "PowerShell $VersionText may require a shell restart before it is active"
+    }
+}
+
+function Invoke-PackageInstall {
+    param([hashtable]$Package)
+
+    if ($Package.ComponentId -eq "package-pwsh") {
+        $Release = Get-PowerShellStableReleaseInfo
+        if (Test-PowerShellReleaseCurrent $Release.Version) {
+            Write-DotfilesLog "PowerShell already meets GitHub stable release $($Release.Tag)"
+            return
+        }
+
+        Install-PowerShellRelease -VersionText $Release.VersionText
+        return
+    }
+
+    Install-WingetPackage -Id $Package.Id -Name $Package.Name -Commands $Package.Commands -Paths $Package.Paths
+}
+
+function Invoke-PackageUpgrade {
+    param([hashtable]$Package)
+
+    if ($Package.ComponentId -eq "package-pwsh") {
+        $Release = Get-PowerShellStableReleaseInfo
+        if (Test-PowerShellReleaseCurrent $Release.Version) {
+            Write-DotfilesLog "PowerShell already meets GitHub stable release $($Release.Tag)"
+            return
+        }
+
+        Install-PowerShellRelease -VersionText $Release.VersionText
+        return
+    }
+
+    Upgrade-WingetPackage -Id $Package.Id -Name $Package.Name
+}
+
 function Update-WingetSources {
+    Assert-Winget
     Write-DotfilesLog "updating winget sources"
     winget source update
 }
@@ -127,8 +286,8 @@ function Select-Packages {
 
 $Packages = @(
     @{ ComponentId = "package-git"; Id = "Git.Git"; Name = "Git"; Commands = @("git") },
-    @{ ComponentId = "package-chezmoi"; Id = "twpayne.chezmoi"; Name = "chezmoi"; Commands = @("chezmoi") },
     @{ ComponentId = "package-msys2"; Id = "MSYS2.MSYS2"; Name = "MSYS2"; Paths = @("C:\msys64\usr\bin\pacman.exe") },
+    @{ ComponentId = "package-chezmoi"; Id = "twpayne.chezmoi"; Name = "chezmoi"; Commands = @("chezmoi") },
     @{ ComponentId = "package-nvim"; Id = "Neovim.Neovim"; Name = "Neovim"; Commands = @("nvim") },
     @{ ComponentId = "package-wezterm"; Id = "wez.wezterm"; Name = "WezTerm"; Commands = @("wezterm") },
     @{ ComponentId = "package-ripgrep"; Id = "BurntSushi.ripgrep.MSVC"; Name = "ripgrep"; Commands = @("rg") },
@@ -145,12 +304,11 @@ if ($Command -eq "help") {
 }
 
 Update-ProcessPath
-Assert-Winget
 
 switch ($Command) {
     "install" {
         foreach ($Package in (Select-Packages $PackageId)) {
-            Install-WingetPackage -Id $Package.Id -Name $Package.Name -Commands $Package.Commands -Paths $Package.Paths
+            Invoke-PackageInstall -Package $Package
         }
         Write-DotfilesLog "Windows package setup complete"
     }
@@ -158,9 +316,13 @@ switch ($Command) {
         Update-WingetSources
     }
     "upgrade" {
-        Update-WingetSources
-        foreach ($Package in (Select-Packages $PackageId)) {
-            Upgrade-WingetPackage -Id $Package.Id -Name $Package.Name
+        $SelectedPackages = @(Select-Packages $PackageId)
+        if (@($SelectedPackages | Where-Object { $_.ComponentId -ne "package-pwsh" }).Count -gt 0) {
+            Update-WingetSources
+        }
+
+        foreach ($Package in $SelectedPackages) {
+            Invoke-PackageUpgrade -Package $Package
         }
         Write-DotfilesLog "Windows managed package upgrade complete"
     }

@@ -34,6 +34,134 @@ function Test-Command {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Resolve-Msys2Command {
+    param([string]$Name)
+
+    $Candidate = Join-Path $Msys2UsrBin "$Name.exe"
+    if (Test-Path -Path $Candidate -PathType Leaf) {
+        return $Candidate
+    }
+
+    foreach ($Prefix in @("ucrt64", "mingw64", "clang64", "clangarm64")) {
+        $Candidate = Join-Path (Join-Path $Msys2Root "$Prefix\bin") "$Name.exe"
+        if (Test-Path -Path $Candidate -PathType Leaf) {
+            return $Candidate
+        }
+    }
+
+    $Command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($Command -and $Command.Source -like "$Msys2Root*") {
+        return $Command.Source
+    }
+
+    return ""
+}
+
+function Test-Msys2Command {
+    param([string]$Name)
+
+    -not [string]::IsNullOrWhiteSpace((Resolve-Msys2Command $Name))
+}
+
+function Get-Msys2HomePath {
+    $Bash = Resolve-Msys2Command "bash"
+    if (-not [string]::IsNullOrWhiteSpace($Bash)) {
+        try {
+            $HomePath = & $Bash -lc 'cygpath -w "$HOME"' 2>$null | Select-Object -First 1
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($HomePath)) {
+                return $HomePath.Trim()
+            }
+        }
+        catch {
+        }
+    }
+
+    return Join-Path "C:\msys64\home" $env:USERNAME
+}
+
+function Get-WindowsChezmoiTargets {
+    return @(
+        ".config/wezterm"
+    )
+}
+
+function Get-Msys2ChezmoiTargets {
+    return @(
+        ".zshenv",
+        ".zshrc",
+        ".p10k.zsh",
+        ".config/zsh",
+        ".config/nvim",
+        ".config/nvim-lite",
+        ".config/tmux"
+    )
+}
+
+function Convert-ChezmoiTargetToPath {
+    param(
+        [string]$Root,
+        [string]$Target
+    )
+
+    return Join-Path $Root ($Target -replace "/", "\")
+}
+
+function New-BackupPath {
+    param(
+        [string]$Path,
+        [string]$Timestamp
+    )
+
+    $Base = "$Path.dotfiles-backup-$Timestamp"
+    $Candidate = $Base
+    $Index = 1
+    while (Test-Path -LiteralPath $Candidate) {
+        $Candidate = "$Base-$Index"
+        $Index += 1
+    }
+
+    return $Candidate
+}
+
+function Backup-StaleWindowsConfigPaths {
+    $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    foreach ($Target in (Get-Msys2ChezmoiTargets)) {
+        $Path = Convert-ChezmoiTargetToPath -Root $HOME -Target $Target
+        if (-not (Test-Path -LiteralPath $Path)) {
+            continue
+        }
+
+        $BackupPath = New-BackupPath -Path $Path -Timestamp $Timestamp
+        Write-DotfilesLog "fix: backing up stale Windows config: $Path -> $BackupPath"
+        Move-Item -LiteralPath $Path -Destination $BackupPath
+    }
+}
+
+function Invoke-Msys2RepoScript {
+    param(
+        [string]$ScriptPath,
+        [string[]]$ScriptArgs
+    )
+
+    $Bash = Resolve-Msys2Command "bash"
+    if ([string]::IsNullOrWhiteSpace($Bash)) {
+        Write-DotfilesLog "MSYS2 bash is required"
+        exit 1
+    }
+
+    $PreviousRoot = $env:DOTFILES_ROOT
+    $PreviousScript = $env:DOTFILES_SCRIPT
+    $env:DOTFILES_ROOT = $RootDir
+    $env:DOTFILES_SCRIPT = $ScriptPath
+    try {
+        & $Bash -lc 'export PATH="/ucrt64/bin:/mingw64/bin:/clang64/bin:/clangarm64/bin:$PATH"; export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"; export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"; export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"; export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"; cd "$(cygpath -u "$DOTFILES_ROOT")" && "$DOTFILES_SCRIPT" "$@"' dotfiles @ScriptArgs
+    }
+    finally {
+        $env:DOTFILES_ROOT = $PreviousRoot
+        $env:DOTFILES_SCRIPT = $PreviousScript
+    }
+}
+
 function Resolve-Chezmoi {
     if ($env:CHEZMOI) {
         return $env:CHEZMOI
@@ -98,12 +226,37 @@ function Mark-Warning {
     Write-DotfilesLog "warning: $Message"
 }
 
+function Add-InstallNeed {
+    param(
+        [string]$ListName,
+        [string]$ComponentId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ComponentId)) {
+        return
+    }
+
+    $Values = @(Get-Variable -Name $ListName -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if ($Values -notcontains $ComponentId) {
+        Set-Variable -Name $ListName -Scope Script -Value ($Values + $ComponentId)
+    }
+}
+
 function Set-InstallNeed {
-    param([string]$InstallGroup)
+    param(
+        [string]$InstallGroup,
+        [string]$ComponentId = ""
+    )
 
     switch ($InstallGroup) {
-        "packages" { $script:NeedPackages = $true }
-        "tools" { $script:NeedTools = $true }
+        "packages" {
+            $script:NeedPackages = $true
+            Add-InstallNeed -ListName "MissingPackageIds" -ComponentId $ComponentId
+        }
+        "tools" {
+            $script:NeedTools = $true
+            Add-InstallNeed -ListName "MissingToolIds" -ComponentId $ComponentId
+        }
         "none" { }
     }
 }
@@ -112,6 +265,7 @@ function Test-CommandStatus {
     param(
         [string]$Name,
         [string]$InstallGroup,
+        [string]$ComponentId = "",
         [string]$Label = $Name
     )
 
@@ -121,7 +275,25 @@ function Test-CommandStatus {
     }
 
     Mark-Missing "command $Label"
-    Set-InstallNeed $InstallGroup
+    Set-InstallNeed -InstallGroup $InstallGroup -ComponentId $ComponentId
+}
+
+function Test-Msys2CommandStatus {
+    param(
+        [string]$Name,
+        [string]$InstallGroup,
+        [string]$ComponentId = "",
+        [string]$Label = $Name
+    )
+
+    $CommandPath = Resolve-Msys2Command $Name
+    if (-not [string]::IsNullOrWhiteSpace($CommandPath)) {
+        Write-DotfilesLog "ok: command $Label"
+        return
+    }
+
+    Mark-Missing "command $Label"
+    Set-InstallNeed -InstallGroup $InstallGroup -ComponentId $ComponentId
 }
 
 function Test-ChezmoiStatus {
@@ -151,28 +323,14 @@ function Test-FileStatus {
     $script:NeedSync = $true
 }
 
-function Test-WindowsConfigFileStatus {
-    param(
-        [string]$Path,
-        [string]$Description
-    )
-
-    if (Test-Path -Path $Path -PathType Leaf) {
-        Write-DotfilesLog "ok: $Description"
-        return
-    }
-
-    Mark-Missing $Description
-    $script:NeedWindowsConfigSync = $true
-}
-
-function Test-Msys2Status {
+function Test-Msys2ZshStatus {
     if (Test-Path -Path $Msys2Pacman -PathType Leaf) {
         Write-DotfilesLog "ok: MSYS2 pacman"
     }
     else {
         Mark-Missing "MSYS2 pacman"
-        $script:NeedPackages = $true
+        Set-InstallNeed -InstallGroup "packages" -ComponentId "package-msys2"
+        $script:NeedMsys2Zsh = $true
         return
     }
 
@@ -190,90 +348,11 @@ function Test-Msys2Status {
         $script:NeedMsys2Zsh = $true
     }
 }
-
-function Test-ZshPluginsStatus {
-    $AntidoteScript = Join-Path $HOME ".antidote\antidote.zsh"
-    $PluginFile = Join-Path $HOME ".config\zsh\plugins.txt"
-    $AntidoteHome = Join-Path $HOME ".cache\antidote"
-    $Bundles = @(
-        "github.com\romkatv\powerlevel10k",
-        "github.com\wfxr\forgit",
-        "github.com\jeffreytse\zsh-vi-mode"
-    )
-
-    if (Test-Path -Path $AntidoteScript -PathType Leaf) {
-        Write-DotfilesLog "ok: Antidote script"
-    }
-    else {
-        Mark-Missing "Antidote script"
-        $script:NeedZshPlugins = $true
-    }
-
-    Test-FileStatus -Path $PluginFile -Description "zsh plugin manifest"
-
-    foreach ($Bundle in $Bundles) {
-        $BundlePath = Join-Path $AntidoteHome $Bundle
-        if (Test-Path -Path $BundlePath -PathType Container) {
-            Write-DotfilesLog "ok: zsh bundle $Bundle"
-        }
-        else {
-            Mark-Missing "zsh bundle $Bundle"
-            $script:NeedZshPlugins = $true
-        }
-    }
-}
-
-function Sync-DirectoryContents {
-    param(
-        [string]$Source,
-        [string]$Target,
-        [string]$Description
-    )
-
-    if (-not (Test-Path -Path $Source -PathType Container)) {
-        Mark-Warning "skipping $Description because source is missing: $Source"
-        return
-    }
-
-    $Parent = Split-Path -Parent $Target
-    New-Item -ItemType Directory -Path $Parent -Force | Out-Null
-
-    if (-not (Test-Path -Path $Target -PathType Container)) {
-        try {
-            Write-DotfilesLog "fix: linking $Description"
-            New-Item -ItemType Junction -Path $Target -Target $Source -Force | Out-Null
-            return
-        }
-        catch {
-            Write-DotfilesLog "warning: failed to create junction for $Description; copying files instead"
-            New-Item -ItemType Directory -Path $Target -Force | Out-Null
-        }
-    }
-
-    $TargetItem = Get-Item -Path $Target -ErrorAction SilentlyContinue
-    if ($TargetItem -and (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
-        Write-DotfilesLog "ok: $Description link"
-        return
-    }
-
-    Write-DotfilesLog "fix: syncing $Description"
-    Get-ChildItem -Path $Source -Force | ForEach-Object {
-        Copy-Item -Path $_.FullName -Destination $Target -Recurse -Force
-    }
-}
-
-function Sync-WindowsConfigPaths {
-    $ManagedNvimConfig = Join-Path $HOME ".config\nvim"
-    $WindowsNvimConfig = Join-Path (Get-LocalAppData) "nvim"
-
-    Sync-DirectoryContents -Source $ManagedNvimConfig -Target $WindowsNvimConfig -Description "Windows Neovim config"
-}
-
 function Test-FontStatus {
     $FontDir = Join-Path (Get-LocalAppData) "Microsoft\Windows\Fonts"
     $FontChecks = @(
-        @{ Pattern = "RedHatMono-Regular.ttf"; Name = "Red Hat Mono" },
-        @{ Pattern = "D2CodingLigatureNerdFont-Regular.ttf"; Name = "D2CodingLigature Nerd Font" }
+        @{ Pattern = "RedHatMono-Regular.ttf"; Name = "Red Hat Mono"; ComponentId = "font-red-hat-mono" },
+        @{ Pattern = "D2CodingLigatureNerdFont-Regular.ttf"; Name = "D2CodingLigature Nerd Font"; ComponentId = "font-d2coding-ligature" }
     )
 
     foreach ($Font in $FontChecks) {
@@ -288,28 +367,57 @@ function Test-FontStatus {
         else {
             Mark-Missing "font $($Font.Name)"
             $script:NeedFonts = $true
+            Add-InstallNeed -ListName "MissingFontIds" -ComponentId $Font.ComponentId
         }
     }
 }
 
 function Test-NeovimPluginsStatus {
-    $NvimLazyDir = Join-Path (Get-LocalAppData) "nvim-data\lazy"
+    $NvimLazyDir = Join-Path $script:Msys2Home ".local\share\nvim-data\lazy"
     $Plugins = @(
-        "lazy.nvim",
-        "smart-splits.nvim",
-        "blink.cmp",
-        "neo-tree.nvim",
-        "nvim-treesitter",
-        "mason.nvim"
+        @{ Dir = "lazy.nvim"; ComponentId = "plugin-nvim-lazy" },
+        @{ Dir = "smart-splits.nvim"; ComponentId = "plugin-nvim-smart-splits" },
+        @{ Dir = "blink.cmp"; ComponentId = "plugin-nvim-blink-cmp" },
+        @{ Dir = "neo-tree.nvim"; ComponentId = "plugin-nvim-neo-tree" },
+        @{ Dir = "nvim-treesitter"; ComponentId = "plugin-nvim-treesitter" },
+        @{ Dir = "mason.nvim"; ComponentId = "plugin-nvim-mason" }
     )
 
     foreach ($Plugin in $Plugins) {
-        if (Test-Path -Path (Join-Path $NvimLazyDir $Plugin) -PathType Container) {
-            Write-DotfilesLog "ok: Neovim plugin $Plugin"
+        if (Test-Path -Path (Join-Path $NvimLazyDir $Plugin.Dir) -PathType Container) {
+            Write-DotfilesLog "ok: Neovim plugin $($Plugin.Dir)"
         }
         else {
-            Mark-Missing "Neovim plugin $Plugin"
+            Mark-Missing "Neovim plugin $($Plugin.Dir)"
             $script:NeedNvimPlugins = $true
+            Add-InstallNeed -ListName "MissingNvimPluginIds" -ComponentId $Plugin.ComponentId
+        }
+    }
+}
+
+function Test-ZshPluginsStatus {
+    $AntidoteDir = Join-Path $script:Msys2Home ".antidote"
+    $AntidoteHome = Join-Path $script:Msys2Home ".cache\antidote"
+
+    if (Test-Path -Path (Join-Path $AntidoteDir "antidote.zsh") -PathType Leaf) {
+        Write-DotfilesLog "ok: Antidote script"
+    }
+    else {
+        Mark-Missing "Antidote script"
+        $script:NeedZshPlugins = $true
+    }
+
+    foreach ($Bundle in @(
+            "github.com\romkatv\powerlevel10k",
+            "github.com\wfxr\forgit",
+            "github.com\jeffreytse\zsh-vi-mode"
+        )) {
+        if (Test-Path -Path (Join-Path $AntidoteHome $Bundle) -PathType Container) {
+            Write-DotfilesLog "ok: zsh bundle $Bundle"
+        }
+        else {
+            Mark-Missing "zsh bundle $Bundle"
+            $script:NeedZshPlugins = $true
         }
     }
 }
@@ -317,7 +425,7 @@ function Test-NeovimPluginsStatus {
 function Test-WezTermStatus {
     if (-not (Test-Command "wezterm")) {
         Mark-Missing "command wezterm"
-        $script:NeedPackages = $true
+        Set-InstallNeed -InstallGroup "packages" -ComponentId "package-wezterm"
         return
     }
 
@@ -355,22 +463,27 @@ function Invoke-DoctorCheck {
     $script:NeedSync = $false
     $script:NeedFonts = $false
     $script:NeedNvimPlugins = $false
+    $script:NeedZshPlugins = $false
     $script:NeedPackages = $false
     $script:NeedTools = $false
     $script:NeedMsys2Zsh = $false
-    $script:NeedZshPlugins = $false
-    $script:NeedWindowsConfigSync = $false
+    $script:MissingPackageIds = @()
+    $script:MissingToolIds = @()
+    $script:MissingFontIds = @()
+    $script:MissingNvimPluginIds = @()
     $script:Chezmoi = Resolve-Chezmoi
+    $script:Msys2Home = Get-Msys2HomePath
 
-    Test-CommandStatus -Name "git" -InstallGroup "packages"
-    Test-ChezmoiStatus
-    Test-CommandStatus -Name "pwsh" -InstallGroup "packages"
-    Test-CommandStatus -Name "nvim" -InstallGroup "packages"
-    Test-CommandStatus -Name "rustc" -InstallGroup "packages"
-    Test-CommandStatus -Name "cargo" -InstallGroup "packages"
-    Test-CommandStatus -Name "zoxide" -InstallGroup "tools"
-    Test-CommandStatus -Name "direnv" -InstallGroup "tools"
-    Test-Msys2Status
+    Test-CommandStatus -Name "git" -InstallGroup "packages" -ComponentId "package-git"
+    Test-Msys2CommandStatus -Name "bash" -InstallGroup "packages" -ComponentId "package-msys2" -Label "MSYS2 bash"
+    Test-Msys2ZshStatus
+    Test-CommandStatus -Name $script:Chezmoi -InstallGroup "packages" -ComponentId "package-chezmoi" -Label "chezmoi"
+    Test-CommandStatus -Name "pwsh" -InstallGroup "packages" -ComponentId "package-pwsh"
+    Test-Msys2CommandStatus -Name "nvim" -InstallGroup "packages" -ComponentId "package-msys2" -Label "MSYS2 nvim"
+    Test-CommandStatus -Name "rustc" -InstallGroup "packages" -ComponentId "dependency-rust"
+    Test-CommandStatus -Name "cargo" -InstallGroup "packages" -ComponentId "dependency-rust"
+    Test-Msys2CommandStatus -Name "zoxide" -InstallGroup "tools" -ComponentId "tool-zoxide"
+    Test-Msys2CommandStatus -Name "direnv" -InstallGroup "tools" -ComponentId "tool-direnv"
 
     if (Test-Path -Path $SourceDir -PathType Container) {
         Write-DotfilesLog "ok: chezmoi source $SourceDir"
@@ -379,16 +492,16 @@ function Invoke-DoctorCheck {
         Mark-Missing "chezmoi source $SourceDir"
     }
 
-    Test-FileStatus -Path (Join-Path $HOME ".config\nvim\init.lua") -Description "managed Neovim config"
-    Test-FileStatus -Path (Join-Path $HOME ".config\nvim\lua\user\plugins\smart-splits.lua") -Description "Neovim smart-splits config"
-    Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\wezterm.lua") -Description "managed WezTerm config"
-    Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\user\smart_splits.lua") -Description "WezTerm smart-splits config"
-    Test-FileStatus -Path (Join-Path $HOME ".zshrc") -Description "managed zshrc"
-    Test-FileStatus -Path (Join-Path $HOME ".zshenv") -Description "managed zshenv"
-    Test-FileStatus -Path (Join-Path $HOME ".local\bin\msys2-zsh.cmd") -Description "MSYS2 zsh launcher"
-    Test-FileStatus -Path (Join-Path $HOME ".local\bin\msys2-zsh.sh") -Description "MSYS2 zsh shell launcher"
-    Test-WindowsConfigFileStatus -Path (Join-Path (Get-LocalAppData) "nvim\init.lua") -Description "Windows Neovim config"
-    Test-WindowsConfigFileStatus -Path (Join-Path (Get-LocalAppData) "nvim\lua\user\plugins\smart-splits.lua") -Description "Windows Neovim smart-splits config"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".config\nvim\init.lua") -Description "MSYS2 Neovim config"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".config\nvim\lua\user\plugins\smart-splits.lua") -Description "MSYS2 Neovim smart-splits config"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".config\nvim-lite\init.lua") -Description "MSYS2 Neovim lite config"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".config\tmux\tmux.conf") -Description "MSYS2 tmux config"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".zshenv") -Description "MSYS2 zshenv"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".zshrc") -Description "MSYS2 zshrc"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".p10k.zsh") -Description "MSYS2 Powerlevel10k config"
+    Test-FileStatus -Path (Join-Path $script:Msys2Home ".config\zsh\plugins.txt") -Description "MSYS2 zsh plugin manifest"
+    Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\wezterm.lua") -Description "Windows WezTerm config"
+    Test-FileStatus -Path (Join-Path $HOME ".config\wezterm\user\smart_splits.lua") -Description "Windows WezTerm smart-splits config"
 
     Test-FontStatus
     Test-ZshPluginsStatus
@@ -411,8 +524,17 @@ function Invoke-WindowsPackages {
         return
     }
 
-    Write-DotfilesLog "fix: running Windows package setup"
-    & $PackageScript install $PackageId
+    $PackageIds = if ([string]::IsNullOrWhiteSpace($PackageId)) { @($script:MissingPackageIds) } else { @($PackageId) }
+    if ($PackageIds.Count -eq 0) {
+        Write-DotfilesLog "fix: running Windows package setup"
+        & $PackageScript
+    }
+    else {
+        foreach ($PackageId in $PackageIds) {
+            Write-DotfilesLog "fix: installing Windows package $PackageId"
+            & $PackageScript install $PackageId
+        }
+    }
     Update-ProcessPath
 }
 
@@ -443,16 +565,39 @@ function Invoke-ChezmoiSync {
         return
     }
 
-    Write-DotfilesLog "fix: syncing chezmoi source"
-    & $script:Chezmoi --source $SourceDir apply
+    Backup-StaleWindowsConfigPaths
+
+    $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
+    Write-DotfilesLog "fix: syncing Windows-native chezmoi targets to Windows home"
+    & $script:Chezmoi --source $SourceDir apply --force @WindowsTargets
+    if ($LASTEXITCODE -ne 0) {
+        Mark-Warning "chezmoi Windows sync failed with exit code $LASTEXITCODE"
+        return
+    }
+
+    $Msys2Home = Get-Msys2HomePath
+    New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
+    $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
+    Write-DotfilesLog "fix: syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
+    & $script:Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
+    if ($LASTEXITCODE -ne 0) {
+        Mark-Warning "chezmoi MSYS2 sync failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Invoke-FontInstall {
     $FontScript = Join-Path (Join-Path $RootDir "scripts") "install-fonts.ps1"
 
     if (Test-Path -Path $FontScript -PathType Leaf) {
-        Write-DotfilesLog "fix: installing bundled fonts"
-        & $FontScript install
+        $FontIds = @($script:MissingFontIds)
+        if ($FontIds.Count -eq 0) {
+            $FontIds = @("all")
+        }
+
+        foreach ($FontId in $FontIds) {
+            Write-DotfilesLog "fix: installing bundled font $FontId"
+            & $FontScript install $FontId
+        }
     }
     else {
         Mark-Missing "Windows font install script"
@@ -463,8 +608,15 @@ function Invoke-UserToolsInstall {
     $ToolsScript = Join-Path (Join-Path $RootDir "scripts") "install-user-tools.ps1"
 
     if (Test-Path -Path $ToolsScript -PathType Leaf) {
-        Write-DotfilesLog "fix: installing Windows user tools"
-        & $ToolsScript install
+        $ToolIds = @($script:MissingToolIds)
+        if ($ToolIds.Count -eq 0) {
+            $ToolIds = @("all")
+        }
+
+        foreach ($ToolId in $ToolIds) {
+            Write-DotfilesLog "fix: installing Windows user tool $ToolId"
+            & $ToolsScript install $ToolId
+        }
         Update-ProcessPath
     }
     else {
@@ -473,19 +625,42 @@ function Invoke-UserToolsInstall {
 }
 
 function Invoke-NeovimPluginsInstall {
-    $NvimScript = Join-Path (Join-Path $RootDir "scripts") "install-neovim-plugins.ps1"
-
-    if (-not (Test-Command "nvim")) {
-        Mark-Warning "skipping Neovim plugin install because nvim is unavailable"
+    if (-not (Test-Msys2Command "nvim")) {
+        Mark-Warning "skipping Neovim plugin install because MSYS2 nvim is unavailable"
         return
     }
 
+    $NvimScript = Join-Path (Join-Path $RootDir "scripts") "install-neovim-plugins.sh"
     if (Test-Path -Path $NvimScript -PathType Leaf) {
-        Write-DotfilesLog "fix: installing Neovim plugins"
-        & $NvimScript install
+        $PluginIds = @($script:MissingNvimPluginIds)
+        if ($PluginIds.Count -eq 0) {
+            $PluginIds = @("all")
+        }
+
+        foreach ($PluginId in $PluginIds) {
+            Write-DotfilesLog "fix: installing MSYS2 Neovim plugin $PluginId"
+            Invoke-Msys2RepoScript "scripts/install-neovim-plugins.sh" @("install", $PluginId)
+        }
     }
     else {
-        Mark-Missing "Windows Neovim plugin install script"
+        Mark-Missing "MSYS2 Neovim plugin install script"
+    }
+}
+
+function Invoke-ZshPluginsInstall {
+    if (-not (Test-Msys2Command "zsh")) {
+        Mark-Warning "skipping zsh plugin install because MSYS2 zsh is unavailable"
+        return
+    }
+
+    $ZshScript = Join-Path (Join-Path $RootDir "scripts") "install-antidote.sh"
+    if (Test-Path -Path $ZshScript -PathType Leaf) {
+        Write-DotfilesLog "fix: installing MSYS2 zsh plugins"
+        Invoke-Msys2RepoScript "scripts/install-antidote.sh" @("install")
+        Invoke-Msys2RepoScript "scripts/install-antidote.sh" @("update")
+    }
+    else {
+        Mark-Missing "MSYS2 zsh plugin install script"
     }
 }
 
@@ -508,14 +683,9 @@ function Invoke-DoctorFix {
 
     if ($script:NeedSync) {
         Invoke-ChezmoiSync
-        $script:NeedWindowsConfigSync = $true
     }
 
-    if ($script:NeedWindowsConfigSync) {
-        Sync-WindowsConfigPaths
-    }
-
-    if ($script:NeedMsys2Zsh -or $script:NeedZshPlugins) {
+    if ($script:NeedMsys2Zsh) {
         Invoke-Msys2ZshInstall
     }
 
@@ -525,6 +695,10 @@ function Invoke-DoctorFix {
 
     if ($script:NeedTools) {
         Invoke-UserToolsInstall
+    }
+
+    if ($script:NeedZshPlugins) {
+        Invoke-ZshPluginsInstall
     }
 
     if ($script:NeedNvimPlugins) {

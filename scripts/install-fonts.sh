@@ -2,12 +2,12 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-FONT_SOURCE_DIR="${FONT_SOURCE_DIR:-$ROOT_DIR/assets/fonts}"
+FONT_SOURCE_ROOT="${FONT_SOURCE_DIR:-$ROOT_DIR/assets/fonts}"
 FONT_DIR="${FONT_DIR:-$HOME/.local/share/fonts/dotfiles}"
 
 usage() {
   cat <<'EOF'
-Usage: install-fonts.sh [install|update|help]
+Usage: install-fonts.sh [install|update|help] [all|font-red-hat-mono|font-d2coding-ligature]
 
 Installs the bundled terminal fonts:
   - Red Hat Mono
@@ -28,27 +28,52 @@ has_command() {
 }
 
 require_font_source() {
-  if [ ! -d "$FONT_SOURCE_DIR" ]; then
-    log "font source directory is not ready: $FONT_SOURCE_DIR"
+  font_source_dir=$1
+
+  if [ ! -d "$font_source_dir" ]; then
+    log "font source directory is not ready: $font_source_dir"
     exit 1
   fi
 }
 
 font_count() {
-  find "$FONT_SOURCE_DIR" -type f \( -iname "*.ttf" -o -iname "*.otf" \) | wc -l | tr -d ' '
+  font_source_dir=$1
+
+  find "$font_source_dir" -type f \( -iname "*.ttf" -o -iname "*.otf" \) | wc -l | tr -d ' '
+}
+
+font_source_dirs() {
+  case "$1" in
+    ""|all)
+      printf '%s\n' "$FONT_SOURCE_ROOT/RedHatMono"
+      printf '%s\n' "$FONT_SOURCE_ROOT/D2Coding"
+      ;;
+    font-red-hat-mono|red-hat-mono|RedHatMono)
+      printf '%s\n' "$FONT_SOURCE_ROOT/RedHatMono"
+      ;;
+    font-d2coding-ligature|d2coding-ligature|D2Coding)
+      printf '%s\n' "$FONT_SOURCE_ROOT/D2Coding"
+      ;;
+    *)
+      log "unknown font id: $1"
+      exit 1
+      ;;
+  esac
 }
 
 copy_bundled_fonts() {
-  require_font_source
+  font_source_dir=$1
 
-  count=$(font_count)
+  require_font_source "$font_source_dir"
+
+  count=$(font_count "$font_source_dir")
   if [ "$count" -eq 0 ]; then
-    log "no font files found in $FONT_SOURCE_DIR"
+    log "no font files found in $font_source_dir"
     exit 1
   fi
 
   mkdir -p "$FONT_DIR"
-  find "$FONT_SOURCE_DIR" -type f \( -iname "*.ttf" -o -iname "*.otf" \) -exec cp -f {} "$FONT_DIR"/ \;
+  find "$font_source_dir" -type f \( -iname "*.ttf" -o -iname "*.otf" \) -exec cp -f {} "$FONT_DIR"/ \;
 }
 
 refresh_font_cache() {
@@ -67,6 +92,7 @@ is_wsl() {
 
 install_windows_fonts_from_wsl() {
   command_name=$1
+  font_id=$2
 
   if ! has_command powershell.exe || ! has_command wslpath; then
     log "WSL detected, but powershell.exe or wslpath is not available"
@@ -76,16 +102,21 @@ install_windows_fonts_from_wsl() {
 
   ps_script=$(wslpath -w "$ROOT_DIR/scripts/install-fonts.ps1")
   log "installing Windows fonts through PowerShell: $ps_script"
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_script" "$command_name"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_script" "$command_name" "$font_id"
 }
 
 install_linux_fonts() {
-  copy_bundled_fonts
+  font_id=$1
+
+  font_source_dirs "$font_id" | while IFS= read -r font_source_dir; do
+    copy_bundled_fonts "$font_source_dir"
+  done
   refresh_font_cache
   log "installed bundled fonts into $FONT_DIR"
 }
 
 command_name="${1:-install}"
+font_id="${2:-all}"
 
 case "$command_name" in
   install|update)
@@ -93,12 +124,12 @@ case "$command_name" in
       installed_windows_fonts=0
       installed_linux_fonts=0
 
-      if install_windows_fonts_from_wsl "$command_name"; then
+      if install_windows_fonts_from_wsl "$command_name" "$font_id"; then
         installed_windows_fonts=1
       fi
 
       if [ "${DOTFILES_INSTALL_WSL_LINUX_FONTS:-0}" = "1" ] || has_command wezterm; then
-        install_linux_fonts
+        install_linux_fonts "$font_id"
         installed_linux_fonts=1
       fi
 
@@ -106,7 +137,7 @@ case "$command_name" in
         exit 1
       fi
     else
-      install_linux_fonts
+      install_linux_fonts "$font_id"
     fi
     ;;
   help|-h|--help)

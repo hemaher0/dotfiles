@@ -3,6 +3,7 @@ param(
     [string]$CommandName = "help",
     [switch]$Raw,
     [switch]$Check,
+    [switch]$CheckUpdates,
     [string]$Install,
     [string]$Update,
     [string]$Sync,
@@ -27,15 +28,25 @@ $CommandArgs = @()
 if ($RemainingArgs) {
     $CommandArgs += $RemainingArgs
 }
-$PowerShellTargetVersion = [Version]"7.6.3"
-$PowerShellReleaseUrl = "https://github.com/PowerShell/PowerShell/releases/tag/v7.6.3"
 $Msys2Root = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { "C:\msys64" }
 $Msys2UsrBin = Join-Path $Msys2Root "usr\bin"
 $Msys2Pacman = Join-Path $Msys2UsrBin "pacman.exe"
 $Msys2Zsh = Join-Path $Msys2UsrBin "zsh.exe"
+$PowerShellStableBuildInfoUrl = "https://aka.ms/pwsh-buildinfo-stable"
+$WingetManagedPackages = @(
+    @{ ComponentId = "package-git"; Id = "Git.Git" },
+    @{ ComponentId = "package-msys2"; Id = "MSYS2.MSYS2" },
+    @{ ComponentId = "package-chezmoi"; Id = "twpayne.chezmoi" },
+    @{ ComponentId = "package-nvim"; Id = "Neovim.Neovim" },
+    @{ ComponentId = "package-wezterm"; Id = "wez.wezterm" },
+    @{ ComponentId = "dependency-rust"; Id = "Rustlang.Rustup" },
+    @{ ComponentId = "tool-zoxide"; Id = "ajeetdsouza.zoxide" },
+    @{ ComponentId = "tool-direnv"; Id = "direnv.direnv" }
+)
 
 if ($Raw) { $CommandArgs += "--raw" }
 if ($Check) { $CommandArgs += "--check" }
+if ($CheckUpdates) { $CommandArgs += "--check-updates" }
 if ($Install) { $CommandArgs += @("--install", $Install) }
 if ($Update) { $CommandArgs += @("--update", $Update) }
 if ($Sync) { $CommandArgs += @("--sync", $Sync) }
@@ -77,6 +88,138 @@ function Test-Command {
     }
 
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Resolve-Msys2Command {
+    param([string]$Name)
+
+    $Candidate = Join-Path $Msys2UsrBin "$Name.exe"
+    if (Test-Path -Path $Candidate -PathType Leaf) {
+        return $Candidate
+    }
+
+    foreach ($Prefix in @("ucrt64", "mingw64", "clang64", "clangarm64")) {
+        $Candidate = Join-Path (Join-Path $Msys2Root "$Prefix\bin") "$Name.exe"
+        if (Test-Path -Path $Candidate -PathType Leaf) {
+            return $Candidate
+        }
+    }
+
+    $Command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($Command -and $Command.Source -like "$Msys2Root*") {
+        return $Command.Source
+    }
+
+    return ""
+}
+
+function Test-Msys2Command {
+    param([string]$Name)
+
+    -not [string]::IsNullOrWhiteSpace((Resolve-Msys2Command $Name))
+}
+
+function Get-Msys2HomePath {
+    $Bash = Resolve-Msys2Command "bash"
+    if (-not [string]::IsNullOrWhiteSpace($Bash)) {
+        try {
+            $HomePath = & $Bash -lc 'cygpath -w "$HOME"' 2>$null | Select-Object -First 1
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($HomePath)) {
+                return $HomePath.Trim()
+            }
+        }
+        catch {
+        }
+    }
+
+    return Join-Path "C:\msys64\home" $env:USERNAME
+}
+
+function Get-WindowsChezmoiTargets {
+    return @(
+        ".config/wezterm"
+    )
+}
+
+function Get-Msys2ChezmoiTargets {
+    return @(
+        ".zshenv",
+        ".zshrc",
+        ".p10k.zsh",
+        ".config/zsh",
+        ".config/nvim",
+        ".config/nvim-lite",
+        ".config/tmux"
+    )
+}
+
+function Convert-ChezmoiTargetToPath {
+    param(
+        [string]$Root,
+        [string]$Target
+    )
+
+    return Join-Path $Root ($Target -replace "/", "\")
+}
+
+function New-BackupPath {
+    param(
+        [string]$Path,
+        [string]$Timestamp
+    )
+
+    $Base = "$Path.dotfiles-backup-$Timestamp"
+    $Candidate = $Base
+    $Index = 1
+    while (Test-Path -LiteralPath $Candidate) {
+        $Candidate = "$Base-$Index"
+        $Index += 1
+    }
+
+    return $Candidate
+}
+
+function Backup-StaleWindowsConfigPaths {
+    $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    foreach ($Target in (Get-Msys2ChezmoiTargets)) {
+        $Path = Convert-ChezmoiTargetToPath -Root $HOME -Target $Target
+        if (-not (Test-Path -LiteralPath $Path)) {
+            continue
+        }
+
+        $BackupPath = New-BackupPath -Path $Path -Timestamp $Timestamp
+        Write-DotfilesLog "backing up stale Windows config: $Path -> $BackupPath"
+        Move-Item -LiteralPath $Path -Destination $BackupPath
+    }
+}
+
+function Invoke-Msys2RepoScript {
+    param(
+        [string]$ScriptPath,
+        [string[]]$ScriptArgs
+    )
+
+    $Bash = Resolve-Msys2Command "bash"
+    if ([string]::IsNullOrWhiteSpace($Bash)) {
+        Write-DotfilesLog "MSYS2 bash is required"
+        exit 1
+    }
+
+    $PreviousRoot = $env:DOTFILES_ROOT
+    $PreviousScript = $env:DOTFILES_SCRIPT
+    $env:DOTFILES_ROOT = $RootDir
+    $env:DOTFILES_SCRIPT = $ScriptPath
+    try {
+        & $Bash -lc 'export PATH="/ucrt64/bin:/mingw64/bin:/clang64/bin:/clangarm64/bin:$PATH"; export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"; export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"; export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"; export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"; cd "$(cygpath -u "$DOTFILES_ROOT")" && "$DOTFILES_SCRIPT" "$@"' dotfiles @ScriptArgs
+    }
+    finally {
+        $env:DOTFILES_ROOT = $PreviousRoot
+        $env:DOTFILES_SCRIPT = $PreviousScript
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }
 
 function Resolve-Chezmoi {
@@ -345,6 +488,33 @@ function Get-Msys2CommandVersion {
     return "present"
 }
 
+function Get-PowerShellStableReleaseInfo {
+    try {
+        $Release = Invoke-RestMethod -Uri $PowerShellStableBuildInfoUrl -Headers @{ "User-Agent" = "dotfiles" } -ErrorAction Stop
+        $Tag = [string]$Release.ReleaseTag
+        if ([string]::IsNullOrWhiteSpace($Tag)) {
+            return [PSCustomObject]@{ Status = "unknown"; Tag = ""; Version = $null; ReleaseDate = ""; Relation = "release metadata missing tag" }
+        }
+
+        $VersionText = $Tag -replace "^v", ""
+        $Version = ConvertTo-VersionOrNull $VersionText
+        if ($null -eq $Version) {
+            return [PSCustomObject]@{ Status = "unknown"; Tag = $Tag; Version = $null; ReleaseDate = ""; Relation = "release metadata has invalid tag" }
+        }
+
+        return [PSCustomObject]@{
+            Status = "ok"
+            Tag = $Tag
+            Version = $Version
+            ReleaseDate = [string]$Release.ReleaseDate
+            Relation = "github stable"
+        }
+    }
+    catch {
+        return [PSCustomObject]@{ Status = "unknown"; Tag = ""; Version = $null; ReleaseDate = ""; Relation = "github stable check failed" }
+    }
+}
+
 function ConvertTo-VersionOrNull {
     param([string]$Value)
 
@@ -378,6 +548,213 @@ function Get-RepoVersion {
     }
 
     return ""
+}
+
+function Get-GitUpdateInfo {
+    if (-not (Test-Command "git")) {
+        return [PSCustomObject]@{ Status = "unknown"; Policy = "git upstream"; Relation = "git unavailable" }
+    }
+
+    $IsRepo = & git -C $RootDir rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -ne 0 -or $IsRepo -ne "true") {
+        return [PSCustomObject]@{ Status = "unknown"; Policy = "git upstream"; Relation = "not a git repository" }
+    }
+
+    $Upstream = & git -C $RootDir rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Upstream)) {
+        return [PSCustomObject]@{ Status = "unknown"; Policy = "git upstream"; Relation = "no upstream configured" }
+    }
+
+    & git -C $RootDir fetch --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return [PSCustomObject]@{ Status = "unknown"; Policy = $Upstream; Relation = "fetch failed" }
+    }
+
+    $Counts = & git -C $RootDir rev-list --left-right --count "HEAD...@{u}" 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Counts)) {
+        return [PSCustomObject]@{ Status = "unknown"; Policy = $Upstream; Relation = "compare failed" }
+    }
+
+    $Parts = ([string]$Counts).Trim() -split "\s+"
+    if ($Parts.Count -lt 2) {
+        return [PSCustomObject]@{ Status = "unknown"; Policy = $Upstream; Relation = "compare failed" }
+    }
+
+    $Ahead = [int]$Parts[0]
+    $Behind = [int]$Parts[1]
+    if ($Behind -gt 0) {
+        $Relation = if ($Ahead -gt 0) { "$Behind behind, $Ahead ahead" } else { "$Behind behind" }
+        return [PSCustomObject]@{ Status = "outdated"; Policy = $Upstream; Relation = $Relation }
+    }
+
+    if ($Ahead -gt 0) {
+        return [PSCustomObject]@{ Status = "ok"; Policy = $Upstream; Relation = "$Ahead ahead" }
+    }
+
+    return [PSCustomObject]@{ Status = "ok"; Policy = $Upstream; Relation = "current" }
+}
+
+function Get-WingetPackageId {
+    param([string]$ComponentId)
+
+    $Package = $WingetManagedPackages | Where-Object { $_.ComponentId -eq $ComponentId } | Select-Object -First 1
+    if ($Package) {
+        return $Package.Id
+    }
+
+    return ""
+}
+
+function New-Msys2CommandRow {
+    param(
+        [string]$Id,
+        [string]$Name,
+        [string[]]$Commands
+    )
+
+    $Missing = @($Commands | Where-Object { -not (Test-Msys2Command $_) })
+    if ($Missing.Count -eq 0) {
+        return New-ComponentRow "ok" "package" "msys2" "local" $Id $Name "winget" "present"
+    }
+
+    return New-ComponentRow "missing" "package" "msys2" "local" $Id $Name "winget" "" "-" "-" "install" "package-msys2"
+}
+
+function New-Msys2ToolRow {
+    param(
+        [string]$Id,
+        [string]$Name,
+        [string[]]$Commands
+    )
+
+    $Missing = @($Commands | Where-Object { -not (Test-Msys2Command $_) })
+    if ($Missing.Count -eq 0) {
+        return New-ComponentRow "ok" "tool" "msys2" "local" $Id $Name "msys2" "present"
+    }
+
+    return New-ComponentRow "missing" "tool" "msys2" "local" $Id $Name "msys2" "" "-" "-" "install" $Id
+}
+
+function Get-WingetUpgradeInfo {
+    param([string]$PackageId)
+
+    if (-not (Test-Command "winget")) {
+        return [PSCustomObject]@{ Status = "unknown"; Available = ""; Relation = "winget unavailable" }
+    }
+
+    try {
+        $Output = & winget upgrade --id $PackageId --exact --accept-source-agreements 2>&1
+        $ExitCode = $LASTEXITCODE
+    }
+    catch {
+        return [PSCustomObject]@{ Status = "unknown"; Available = ""; Relation = "winget failed" }
+    }
+
+    $Text = ($Output | Out-String).Trim()
+    if ($Text -match "(?i)no available upgrade|no installed package|no package found|no applicable update|사용 가능한 업그레이드.*찾을 수 없습니다|최신 패키지 버전이 없습니다|설치된 패키지.*찾을 수 없습니다") {
+        return [PSCustomObject]@{ Status = "ok"; Available = ""; Relation = "current" }
+    }
+
+    foreach ($Line in ($Text -split "(`r`n|`n|`r)")) {
+        if ($Line -notmatch [regex]::Escape($PackageId)) {
+            continue
+        }
+
+        $Tokens = @($Line.Trim() -split "\s+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $IdIndex = [Array]::IndexOf($Tokens, $PackageId)
+        if ($IdIndex -ge 0 -and $Tokens.Count -gt ($IdIndex + 2)) {
+            return [PSCustomObject]@{ Status = "outdated"; Available = $Tokens[$IdIndex + 2]; Relation = "update available" }
+        }
+    }
+
+    if ($ExitCode -eq 0 -and $Text) {
+        return [PSCustomObject]@{ Status = "unknown"; Available = ""; Relation = "winget output unparsed" }
+    }
+
+    return [PSCustomObject]@{ Status = "unknown"; Available = ""; Relation = "winget check failed" }
+}
+
+function Add-UpdateInfo {
+    param([object[]]$Rows)
+
+    foreach ($Row in $Rows) {
+        if ($Row.Id -eq "repo-dotfiles" -and $Row.Status -eq "ok") {
+            $Info = Get-GitUpdateInfo
+            $Row.Policy = $Info.Policy
+            $Row.Relation = $Info.Relation
+            if ($Info.Status -eq "outdated") {
+                $Row.Status = "outdated"
+                $Row.ActionKind = "update"
+                $Row.ActionTarget = "repo-dotfiles"
+            }
+            elseif ($Info.Status -eq "unknown") {
+                $Row.Status = "unknown"
+            }
+            continue
+        }
+
+        if ($Row.Id -eq "package-pwsh") {
+            if ($Row.Status -ne "ok") {
+                continue
+            }
+
+            $CurrentVersion = ConvertTo-VersionOrNull $Row.Current
+            $Release = Get-PowerShellStableReleaseInfo
+            if ($Release.Status -ne "ok" -or $null -eq $Release.Version) {
+                $Row.Status = "unknown"
+                $Row.Policy = "github stable"
+                $Row.Relation = $Release.Relation
+                $Row.ActionKind = "update"
+                $Row.ActionTarget = $Row.Id
+                continue
+            }
+
+            $Row.Policy = "github $($Release.Tag)"
+            if ($null -eq $CurrentVersion) {
+                $Row.Status = "unknown"
+                $Row.Relation = "version unknown"
+                $Row.ActionKind = "update"
+                $Row.ActionTarget = $Row.Id
+            }
+            elseif ($CurrentVersion -lt $Release.Version) {
+                $Row.Status = "outdated"
+                $Row.Relation = "update available"
+                $Row.ActionKind = "update"
+                $Row.ActionTarget = $Row.Id
+            }
+            else {
+                $Row.Relation = "current"
+            }
+            continue
+        }
+
+        $WingetId = Get-WingetPackageId $Row.Id
+        if ([string]::IsNullOrWhiteSpace($WingetId) -or $Row.Status -ne "ok") {
+            continue
+        }
+
+        $Info = Get-WingetUpgradeInfo $WingetId
+        if ($Info.Status -eq "outdated") {
+            $Row.Status = "outdated"
+            $Row.Policy = if ($Info.Available) { "winget $($Info.Available)" } else { "winget latest" }
+            $Row.Relation = $Info.Relation
+            $Row.ActionKind = "update"
+            $Row.ActionTarget = $Row.Id
+        }
+        elseif ($Info.Status -eq "ok") {
+            $Row.Policy = "winget latest"
+            $Row.Relation = $Info.Relation
+        }
+        else {
+            $Row.Status = "unknown"
+            $Row.Policy = "winget latest"
+            $Row.Relation = $Info.Relation
+            $Row.ActionKind = "update"
+            $Row.ActionTarget = $Row.Id
+        }
+    }
+
+    return $Rows
 }
 
 function New-ComponentRow {
@@ -435,22 +812,18 @@ function New-CommandRow {
 
 function New-PowerShellRow {
     $Current = Get-PowerShellVersion
-    $Policy = ">= $PowerShellTargetVersion ($PowerShellReleaseUrl)"
+    $Policy = "github stable"
 
     if ([string]::IsNullOrWhiteSpace($Current)) {
-        return New-ComponentRow "missing" "package" "system" "system" "package-pwsh" "PowerShell" "winget" "" $Policy "not installed" "install" "package-pwsh"
+        return New-ComponentRow "missing" "package" "system" "system" "package-pwsh" "PowerShell" "github" "" $Policy "not installed" "install" "package-pwsh"
     }
 
     $CurrentVersion = ConvertTo-VersionOrNull $Current
     if ($null -eq $CurrentVersion) {
-        return New-ComponentRow "unknown" "package" "system" "system" "package-pwsh" "PowerShell" "winget" $Current $Policy "version unknown" "update" "package-pwsh"
+        return New-ComponentRow "unknown" "package" "system" "system" "package-pwsh" "PowerShell" "github" $Current $Policy "version unknown"
     }
 
-    if ($CurrentVersion -lt $PowerShellTargetVersion) {
-        return New-ComponentRow "outdated" "package" "system" "system" "package-pwsh" "PowerShell" "winget" $Current $Policy "behind target" "update" "package-pwsh"
-    }
-
-    return New-ComponentRow "ok" "package" "system" "system" "package-pwsh" "PowerShell" "winget" $Current $Policy "meets target"
+    return New-ComponentRow "ok" "package" "system" "system" "package-pwsh" "PowerShell" "github" $Current $Policy "installed"
 }
 
 function New-FileRow {
@@ -486,39 +859,6 @@ function New-Msys2ZshRow {
     }
 
     return New-ComponentRow "missing" "package" "msys2" "local" "package-zsh" "MSYS2 zsh" "pacman" "" "-" "-" "install" "package-zsh"
-}
-
-function Get-ZshPluginRows {
-    $AntidoteScript = Join-Path $HOME ".antidote\antidote.zsh"
-    $AntidoteHome = Join-Path $HOME ".cache\antidote"
-    $Plugins = @(
-        @{ Id = "plugin-zsh-antidote"; Name = "Antidote"; Path = $AntidoteScript; Type = "file" },
-        @{ Id = "plugin-zsh-powerlevel10k"; Name = "zsh plugin: powerlevel10k"; Path = (Join-Path $AntidoteHome "github.com\romkatv\powerlevel10k"); Type = "dir" },
-        @{ Id = "plugin-zsh-forgit"; Name = "zsh plugin: forgit"; Path = (Join-Path $AntidoteHome "github.com\wfxr\forgit"); Type = "dir" },
-        @{ Id = "plugin-zsh-vi-mode"; Name = "zsh plugin: zsh-vi-mode"; Path = (Join-Path $AntidoteHome "github.com\jeffreytse\zsh-vi-mode"); Type = "dir" }
-    )
-
-    $Missing = 0
-    $Rows = @()
-    foreach ($Plugin in $Plugins) {
-        $PathType = if ($Plugin.Type -eq "file") { "Leaf" } else { "Container" }
-        if (Test-Path -Path $Plugin.Path -PathType $PathType) {
-            $Rows += New-ComponentRow "ok" "plugin" "zsh" "local" $Plugin.Id $Plugin.Name "antidote" "present"
-        }
-        else {
-            $Missing += 1
-            $Rows += New-ComponentRow "missing" "plugin" "zsh" "local" $Plugin.Id $Plugin.Name "antidote" "managed by plugin-zsh"
-        }
-    }
-
-    if ($Missing -eq 0) {
-        $GroupRow = New-ComponentRow "ok" "plugin" "zsh" "local" "plugin-zsh" "zsh plugins" "antidote" "$($Plugins.Count) present"
-    }
-    else {
-        $GroupRow = New-ComponentRow "missing" "plugin" "zsh" "local" "plugin-zsh" "zsh plugins" "antidote" "$Missing/$($Plugins.Count) missing" "-" "-" "install" "plugin-zsh"
-    }
-
-    return @($GroupRow) + $Rows
 }
 
 function New-DirRow {
@@ -557,7 +897,7 @@ function New-FontRow {
 }
 
 function Get-NvimPluginRows {
-    $NvimLazyDir = Join-Path (Get-LocalAppData) "nvim-data\lazy"
+    $NvimLazyDir = Join-Path (Get-Msys2HomePath) ".local\share\nvim-data\lazy"
     $Plugins = @(
         @{ Id = "plugin-nvim-lazy"; Name = "Neovim plugin: lazy.nvim"; Dir = "lazy.nvim" },
         @{ Id = "plugin-nvim-smart-splits"; Name = "Neovim plugin: smart-splits.nvim"; Dir = "smart-splits.nvim" },
@@ -576,7 +916,7 @@ function Get-NvimPluginRows {
         }
         else {
             $Missing += 1
-            $Rows += New-ComponentRow "missing" "plugin" "nvim" "local" $Plugin.Id $Plugin.Name "lazy.nvim" "managed by plugin-nvim"
+            $Rows += New-ComponentRow "missing" "plugin" "nvim" "local" $Plugin.Id $Plugin.Name "lazy.nvim" "managed by plugin-nvim" "-" "-" "install" "plugin-nvim"
         }
     }
 
@@ -590,10 +930,53 @@ function Get-NvimPluginRows {
     return @($GroupRow) + $Rows
 }
 
+function Get-ZshPluginRows {
+    $Msys2Home = Get-Msys2HomePath
+    $AntidoteDir = Join-Path $Msys2Home ".antidote"
+    $AntidoteHome = Join-Path $Msys2Home ".cache\antidote"
+    $Plugins = @(
+        @{ Id = "plugin-zsh-antidote"; Name = "Antidote"; Method = "git"; Kind = "file"; Path = (Join-Path $AntidoteDir "antidote.zsh") },
+        @{ Id = "plugin-zsh-powerlevel10k"; Name = "zsh plugin: powerlevel10k"; Method = "antidote"; Kind = "dir"; Path = (Join-Path $AntidoteHome "github.com\romkatv\powerlevel10k") },
+        @{ Id = "plugin-zsh-forgit"; Name = "zsh plugin: forgit"; Method = "antidote"; Kind = "dir"; Path = (Join-Path $AntidoteHome "github.com\wfxr\forgit") },
+        @{ Id = "plugin-zsh-vi-mode"; Name = "zsh plugin: zsh-vi-mode"; Method = "antidote"; Kind = "dir"; Path = (Join-Path $AntidoteHome "github.com\jeffreytse\zsh-vi-mode") }
+    )
+
+    $Missing = 0
+    $Rows = @()
+    foreach ($Plugin in $Plugins) {
+        $Exists = if ($Plugin.Kind -eq "file") {
+            Test-Path -Path $Plugin.Path -PathType Leaf
+        }
+        else {
+            Test-Path -Path $Plugin.Path -PathType Container
+        }
+
+        if ($Exists) {
+            $Rows += New-ComponentRow "ok" "plugin" "zsh" "local" $Plugin.Id $Plugin.Name $Plugin.Method "present"
+        }
+        else {
+            $Missing += 1
+            $Rows += New-ComponentRow "missing" "plugin" "zsh" "local" $Plugin.Id $Plugin.Name $Plugin.Method "managed by plugin-zsh" "-" "-" "install" "plugin-zsh"
+        }
+    }
+
+    if ($Missing -eq 0) {
+        $GroupRow = New-ComponentRow "ok" "plugin" "zsh" "local" "plugin-zsh" "zsh plugins" "antidote" "$($Plugins.Count) present"
+    }
+    else {
+        $GroupRow = New-ComponentRow "missing" "plugin" "zsh" "local" "plugin-zsh" "zsh plugins" "antidote" "$Missing/$($Plugins.Count) missing" "-" "-" "install" "plugin-zsh"
+    }
+
+    return @($GroupRow) + $Rows
+}
+
 function Get-ComponentRows {
+    param([switch]$CheckUpdates)
+
     Update-ProcessPath
 
     $Chezmoi = Resolve-Chezmoi
+    $Msys2Home = Get-Msys2HomePath
     $Rows = @()
 
     $RepoCurrent = Get-RepoVersion
@@ -609,33 +992,42 @@ function Get-ComponentRows {
     $Rows += New-Msys2Row
     $Rows += New-Msys2ZshRow
     $Rows += New-PowerShellRow
-    $Rows += New-CommandRow "package" "system" "system" "package-nvim" "nvim" "package" @("nvim")
+    $Rows += New-Msys2CommandRow "package-nvim" "MSYS2 nvim" @("nvim")
     $Rows += New-CommandRow "package" "system" "system" "package-wezterm" "WezTerm" "package" @("wezterm")
     $Rows += New-CommandRow "dependency" "rustup" "local" "dependency-rust" "Rust toolchain" "rustup" @("rustc", "cargo")
-    $Rows += New-CommandRow "tool" "user-bin" "local" "tool-zoxide" "zoxide" "winget" @("zoxide")
-    $Rows += New-CommandRow "tool" "user-bin" "local" "tool-direnv" "direnv" "winget" @("direnv")
+    $Rows += New-Msys2ToolRow "tool-zoxide" "MSYS2 zoxide" @("zoxide")
+    $Rows += New-Msys2ToolRow "tool-direnv" "MSYS2 direnv" @("direnv")
 
-    $Rows += New-FileRow "config-nvim" "managed Neovim config" (Join-Path $HOME ".config\nvim\init.lua")
-    $Rows += New-FileRow "config-nvim-windows" "Windows Neovim config" (Join-Path (Get-LocalAppData) "nvim\init.lua")
+    $Rows += New-FileRow "config-nvim" "MSYS2 Neovim config" (Join-Path $Msys2Home ".config\nvim\init.lua")
+    $Rows += New-FileRow "config-nvim-lite" "MSYS2 Neovim lite config" (Join-Path $Msys2Home ".config\nvim-lite\init.lua")
+    $Rows += New-FileRow "config-tmux" "MSYS2 tmux config" (Join-Path $Msys2Home ".config\tmux\tmux.conf")
+    $Rows += New-FileRow "config-zshrc" "MSYS2 zshrc" (Join-Path $Msys2Home ".zshrc")
+    $Rows += New-FileRow "config-zshenv" "MSYS2 zshenv" (Join-Path $Msys2Home ".zshenv")
+    $Rows += New-FileRow "config-zsh-plugins" "MSYS2 zsh plugin manifest" (Join-Path $Msys2Home ".config\zsh\plugins.txt")
+    $Rows += New-FileRow "config-p10k" "MSYS2 Powerlevel10k config" (Join-Path $Msys2Home ".p10k.zsh")
     $Rows += New-FileRow "config-wezterm" "managed WezTerm config" (Join-Path $HOME ".config\wezterm\wezterm.lua")
     $Rows += New-FileRow "config-wezterm-smart-splits" "WezTerm smart-splits config" (Join-Path $HOME ".config\wezterm\user\smart_splits.lua") "config-wezterm"
-    $Rows += New-FileRow "config-zshrc" "managed zshrc" (Join-Path $HOME ".zshrc")
-    $Rows += New-FileRow "config-zshenv" "managed zshenv" (Join-Path $HOME ".zshenv")
-    $Rows += New-FileRow "config-zsh-plugins" "zsh plugin manifest" (Join-Path $HOME ".config\zsh\plugins.txt")
-    $Rows += New-FileRow "config-msys2-zsh-launcher" "MSYS2 zsh launcher" (Join-Path $HOME ".local\bin\msys2-zsh.cmd")
-    $Rows += New-FileRow "config-msys2-zsh-shell-launcher" "MSYS2 zsh shell launcher" (Join-Path $HOME ".local\bin\msys2-zsh.sh")
 
     $Rows += New-FontRow "font-red-hat-mono" "Red Hat Mono" "RedHatMono-Regular.ttf"
     $Rows += New-FontRow "font-d2coding-ligature" "D2CodingLigature Nerd Font" "D2CodingLigatureNerdFont-Regular.ttf"
     $Rows += Get-ZshPluginRows
     $Rows += Get-NvimPluginRows
 
-    $MissingCount = @($Rows | Where-Object { $_.Status -eq "missing" -or $_.Status -eq "unknown" -or $_.Status -eq "outdated" }).Count
-    if ($MissingCount -eq 0) {
+    if ($CheckUpdates) {
+        $Rows = @(Add-UpdateInfo -Rows $Rows)
+    }
+
+    $NeedsActionCount = @($Rows | Where-Object { $_.Status -eq "missing" -or $_.Status -eq "unknown" -or $_.Status -eq "outdated" }).Count
+    $MissingOrUnknownCount = @($Rows | Where-Object { $_.Status -eq "missing" -or $_.Status -eq "unknown" }).Count
+    $OutdatedCount = @($Rows | Where-Object { $_.Status -eq "outdated" }).Count
+    if ($NeedsActionCount -eq 0) {
         $AllRow = New-ComponentRow "ok" "all" "setup" "local" "all-install" "complete dotfiles setup" "installer" "all present"
     }
+    elseif ($CheckUpdates -and $OutdatedCount -gt 0 -and $MissingOrUnknownCount -eq 0) {
+        $AllRow = New-ComponentRow "outdated" "all" "setup" "local" "all-updates" "managed updates" "installer" "$OutdatedCount update available" "-" "updates available" "update" "all-updates"
+    }
     else {
-        $AllRow = New-ComponentRow "missing" "all" "setup" "local" "all-install" "complete dotfiles setup" "installer" "$MissingCount need action" "-" "-" "install" "all-install"
+        $AllRow = New-ComponentRow "missing" "all" "setup" "local" "all-install" "complete dotfiles setup" "installer" "$NeedsActionCount need action" "-" "-" "install" "all-install"
     }
 
     return @($AllRow) + $Rows
@@ -661,7 +1053,9 @@ function ConvertTo-RawRow {
 }
 
 function Write-ComponentRaw {
-    Get-ComponentRows | ForEach-Object { ConvertTo-RawRow $_ }
+    param([switch]$CheckUpdates)
+
+    Get-ComponentRows -CheckUpdates:$CheckUpdates | ForEach-Object { ConvertTo-RawRow $_ }
 }
 
 function Get-DisplayValue {
@@ -675,11 +1069,13 @@ function Get-DisplayValue {
 }
 
 function Write-ComponentTable {
+    param([switch]$CheckUpdates)
+
     $Format = "{0,-8} {1,-12} {2,-12} {3,-7} {4,-28} {5,-34} {6,-14} {7,-16} {8,-36} {9,-24} {10}"
     $Format -f "STATUS", "CATEGORY", "GROUP", "SCOPE", "ID", "COMPONENT", "METHOD", "CURRENT", "POLICY", "RELATION", "ACTION"
     $Format -f "------", "--------", "-----", "-----", "--", "---------", "------", "-------", "------", "--------", "------"
 
-    Get-ComponentRows | ForEach-Object {
+    Get-ComponentRows -CheckUpdates:$CheckUpdates | ForEach-Object {
         $Action = if ($_.ActionKind -eq "none" -or [string]::IsNullOrWhiteSpace($_.ActionTarget)) {
             "-"
         }
@@ -690,51 +1086,6 @@ function Write-ComponentTable {
         $Format -f $_.Status, $_.Category, $_.Group, $_.Scope, $_.Id, $_.Name, $_.Method,
             (Get-DisplayValue $_.Current), (Get-DisplayValue $_.Policy), (Get-DisplayValue $_.Relation), $Action
     }
-}
-
-function Sync-DirectoryContents {
-    param(
-        [string]$Source,
-        [string]$Target,
-        [string]$Description
-    )
-
-    if (-not (Test-Path -Path $Source -PathType Container)) {
-        Write-DotfilesLog "skipping $Description because source is missing: $Source"
-        return
-    }
-
-    $Parent = Split-Path -Parent $Target
-    New-Item -ItemType Directory -Path $Parent -Force | Out-Null
-
-    if (-not (Test-Path -Path $Target -PathType Container)) {
-        try {
-            Write-DotfilesLog "linking $Description"
-            New-Item -ItemType Junction -Path $Target -Target $Source -Force | Out-Null
-            return
-        }
-        catch {
-            Write-DotfilesLog "failed to create junction for $Description; copying files instead"
-            New-Item -ItemType Directory -Path $Target -Force | Out-Null
-        }
-    }
-
-    $TargetItem = Get-Item -Path $Target -ErrorAction SilentlyContinue
-    if ($TargetItem -and (($TargetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
-        Write-DotfilesLog "ok: $Description link"
-        return
-    }
-
-    Write-DotfilesLog "syncing $Description"
-    Get-ChildItem -Path $Source -Force | ForEach-Object {
-        Copy-Item -Path $_.FullName -Destination $Target -Recurse -Force
-    }
-}
-
-function Sync-WindowsConfigPaths {
-    $ManagedNvimConfig = Join-Path $HOME ".config\nvim"
-    $WindowsNvimConfig = Join-Path (Get-LocalAppData) "nvim"
-    Sync-DirectoryContents -Source $ManagedNvimConfig -Target $WindowsNvimConfig -Description "Windows Neovim config"
 }
 
 function Invoke-ChezmoiSync {
@@ -753,8 +1104,23 @@ function Invoke-ChezmoiSync {
         exit 1
     }
 
-    Write-DotfilesLog "syncing chezmoi source"
-    & $Chezmoi --source $SourceDir apply
+    Backup-StaleWindowsConfigPaths
+
+    $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
+    Write-DotfilesLog "syncing Windows-native chezmoi targets to Windows home"
+    & $Chezmoi --source $SourceDir apply --force @WindowsTargets
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    $Msys2Home = Get-Msys2HomePath
+    New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
+    $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
+    Write-DotfilesLog "syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
+    & $Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }
 
 function Invoke-PackageAction {
@@ -769,27 +1135,6 @@ function Invoke-PackageAction {
     Update-ProcessPath
 }
 
-function Invoke-ToolAction {
-    param([string]$ActionName)
-
-    $ToolsScript = Join-Path (Join-Path $RootDir "scripts") "install-user-tools.ps1"
-    $ScriptAction = if ($ActionName -eq "update") { "update" } else { "install" }
-    & $ToolsScript $ScriptAction
-}
-
-function Invoke-FontAction {
-    $FontScript = Join-Path (Join-Path $RootDir "scripts") "install-fonts.ps1"
-    & $FontScript install
-}
-
-function Invoke-NvimPluginAction {
-    param([string]$ActionName)
-
-    $NvimScript = Join-Path (Join-Path $RootDir "scripts") "install-neovim-plugins.ps1"
-    $ScriptAction = if ($ActionName -eq "update") { "update" } else { "install" }
-    & $NvimScript $ScriptAction
-}
-
 function Invoke-ZshAction {
     param([string]$ActionName)
 
@@ -798,37 +1143,99 @@ function Invoke-ZshAction {
     & $ZshScript $ScriptAction
 }
 
-function Invoke-ComponentAction {
+function Invoke-ToolAction {
     param(
         [string]$ActionName,
         [string]$ComponentId
     )
 
+    $ToolsScript = Join-Path (Join-Path $RootDir "scripts") "install-user-tools.ps1"
+    $ScriptAction = if ($ActionName -eq "update") { "update" } else { "install" }
+    & $ToolsScript $ScriptAction $ComponentId
+}
+
+function Invoke-FontAction {
+    param([string]$ComponentId)
+
+    $FontScript = Join-Path (Join-Path $RootDir "scripts") "install-fonts.ps1"
+    & $FontScript install $ComponentId
+}
+
+function Invoke-NvimPluginAction {
+    param(
+        [string]$ActionName,
+        [string]$ComponentId
+    )
+
+    $ScriptAction = if ($ActionName -eq "update") { "update" } else { "install" }
+    Invoke-Msys2RepoScript "scripts/install-neovim-plugins.sh" @($ScriptAction, $ComponentId)
+}
+
+function Invoke-ZshPluginAction {
+    param([string]$ActionName)
+
+    if ($ActionName -eq "update") {
+        Invoke-Msys2RepoScript "scripts/install-antidote.sh" @("update")
+        return
+    }
+
+    Invoke-Msys2RepoScript "scripts/install-antidote.sh" @("install")
+    Invoke-Msys2RepoScript "scripts/install-antidote.sh" @("update")
+}
+
+function Invoke-AllUpdates {
+    $Rows = @(Get-ComponentRows -CheckUpdates | Where-Object {
+            $_.Status -eq "outdated" -and $_.ActionKind -eq "update" -and -not [string]::IsNullOrWhiteSpace($_.ActionTarget)
+        })
+
+    if ($Rows.Count -eq 0) {
+        Write-DotfilesLog "no managed updates available"
+        return
+    }
+
+    $Targets = @($Rows | ForEach-Object { $_.ActionTarget } | Select-Object -Unique)
+    foreach ($Target in $Targets) {
+        Write-DotfilesLog "updating managed component: $Target"
+        Invoke-ComponentAction "update" $Target -NoStatus
+    }
+}
+
+function Invoke-ComponentAction {
+    param(
+        [string]$ActionName,
+        [string]$ComponentId,
+        [switch]$NoStatus
+    )
+
     Write-DotfilesLog "$ActionName component: $ComponentId"
 
     switch -Regex ($ComponentId) {
+        "^all-updates$" {
+            if ($ActionName -ne "update") {
+                Write-DotfilesLog "$ActionName is not supported for component: $ComponentId"
+                exit 1
+            }
+            Invoke-AllUpdates
+            break
+        }
         "^all-install$" { & $BootstrapScript; break }
         "^repo-dotfiles$" { Invoke-GitRoot pull --ff-only; break }
         "^package-zsh$" { Invoke-ZshAction $ActionName; break }
         "^(package-|dependency-rust)" { Invoke-PackageAction $ActionName $ComponentId; break }
-        "^tool-" { Invoke-ToolAction $ActionName; break }
-        "^font-" { Invoke-FontAction; break }
-        "^plugin-zsh$" { Invoke-ChezmoiSync; Invoke-ZshAction $ActionName; break }
+        "^tool-" { Invoke-ToolAction $ActionName $ComponentId; break }
+        "^font-" { Invoke-FontAction $ComponentId; break }
+        "^plugin-zsh$" { Invoke-ChezmoiSync; Invoke-ZshPluginAction $ActionName; break }
         "^plugin-zsh-" {
             Write-DotfilesLog "$ActionName is managed by group component: plugin-zsh"
             exit 1
         }
-        "^plugin-nvim$" { Invoke-NvimPluginAction $ActionName; break }
+        "^plugin-nvim$" { Invoke-NvimPluginAction $ActionName $ComponentId; break }
         "^plugin-nvim-" {
             Write-DotfilesLog "$ActionName is managed by group component: plugin-nvim"
             exit 1
         }
-        "^config-nvim-windows$" { Sync-WindowsConfigPaths; break }
         "^config-" {
             Invoke-ChezmoiSync
-            if ($ComponentId -eq "config-nvim") {
-                Sync-WindowsConfigPaths
-            }
             break
         }
         default {
@@ -837,8 +1244,10 @@ function Invoke-ComponentAction {
         }
     }
 
-    Write-DotfilesLog "component status"
-    Write-ComponentTable
+    if (-not $NoStatus) {
+        Write-DotfilesLog "component status"
+        Write-ComponentTable
+    }
 }
 
 function Invoke-UpdateCommand {
@@ -851,6 +1260,8 @@ function Invoke-UpdateCommand {
         switch ($UpdateArgs[$Index]) {
             "--check" { $Action = "check" }
             "check" { $Action = "check" }
+            "--check-updates" { $Action = "check-updates" }
+            "check-updates" { $Action = "check-updates" }
             "--raw" { $Action = "raw" }
             "raw" { $Action = "raw" }
             "--install" {
@@ -906,6 +1317,10 @@ function Invoke-UpdateCommand {
             Write-DotfilesLog "component status"
             Write-ComponentTable
         }
+        "check-updates" {
+            Write-DotfilesLog "checking managed updates"
+            Write-ComponentTable -CheckUpdates
+        }
         "status" {
             if (-not (Test-Command "git")) {
                 Write-DotfilesLog "git is required for update"
@@ -956,7 +1371,6 @@ switch ($CommandName) {
     "tui" { Invoke-Tui }
     "sync" {
         Invoke-ChezmoiSync
-        Sync-WindowsConfigPaths
     }
     "dev-ref" { Invoke-DevRefCommand -Args $CommandArgs }
     "dev-apply" { Invoke-DevApply }

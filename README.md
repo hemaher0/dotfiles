@@ -1,19 +1,19 @@
 # Dotfiles
 
-Personal dotfiles for rebuilding my shell, editor, terminal, and tmux setup across Linux, WSL, Ubuntu, and Windows.
+Personal dotfiles for rebuilding my shell, editor, terminal, and tmux setup across Linux, WSL, and Windows.
 
-The repository is managed with `chezmoi`. Bootstrap scripts handle the repeatable parts around package setup, fonts, Neovim plugins, zsh plugins, tmux configuration, and WezTerm configuration.
+This repository uses `chezmoi` for managed home-directory files and small wrapper scripts for repeatable setup tasks. The scripts are intentionally part of the dotfiles rather than a general-purpose installer.
 
-## What's Included
+## Included
 
 - zsh configuration with Antidote-managed plugins
 - Powerlevel10k prompt configuration
-- Neovim configuration with Lazy.nvim
+- Neovim and nvim-lite configuration
 - tmux configuration with Oh my tmux
 - WezTerm configuration
-- Red Hat Mono and D2CodingLigature Nerd Font files
-- zoxide and direnv installers
-- Platform package scripts for Ubuntu, WSL, and Windows
+- Bundled Red Hat Mono and D2CodingLigature Nerd Font files
+- zoxide and direnv setup helpers
+- Platform setup scripts for Ubuntu, WSL, and Windows
 
 ## Quick Start
 
@@ -126,10 +126,17 @@ bin/dot bootstrap
 
 `bin/dot` and `.\bin\dot.ps1` run the real checkout. `bin/dot-dev` and `.\bin\dot-dev.ps1` create or reuse an ignored `.dev/` worktree and run commands from that development checkout instead. The development ref defaults to `dev`; change it per machine with `bin/dot dev-ref <git-ref>` or `.\bin\dot.ps1 dev-ref <git-ref>`, or override it for one session with `DOTFILES_DEV_REF`. After validating in `.dev/`, run `bin/dot dev-apply` or `.\bin\dot.ps1 dev-apply` to copy changed and untracked files from `.dev/` into the real checkout.
 
-## Notes
+## Layout
 
 - `home/` is the chezmoi source directory.
-- Machine-local zsh changes can go in `~/.config/zsh/local.zsh`.
-- Machine-local tmux changes can go in `~/.config/tmux/tmux.conf.local`.
-- Machine-local WezTerm changes can go in `~/.config/wezterm/user/local.lua`.
-- WSL installs Windows fonts when PowerShell is available, and also installs Linux fontconfig fonts when local WSL WezTerm is present.
+- `bin/` contains the main dotfiles command wrappers.
+- `packages/` contains platform package setup scripts.
+- `scripts/` contains focused installers for fonts, plugins, and user tools.
+- `assets/` contains bundled local assets such as fonts.
+- `tools/` contains helper applications used by the dotfiles workflow.
+
+## Windows Notes
+
+Windows-native config is applied to the native Windows home directory. MSYS2-oriented terminal tool config, including zsh, Neovim, nvim-lite, and tmux, is applied to the MSYS2 home directory.
+
+PowerShell updates track the upstream GitHub stable release metadata because winget can lag behind PowerShell releases.

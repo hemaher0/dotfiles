@@ -6,11 +6,16 @@ end
 
 function M.sync(config, wezterm)
   if is_windows(wezterm) then
-    local user_profile = os.getenv("USERPROFILE") or ""
-    local msys2_zsh = user_profile .. "\\.local\\bin\\msys2-zsh.cmd"
+    local msys2 = require("user.msys2")
+    local msys2_zsh = msys2.zsh()
+    local msys2_bash = msys2.bash()
+    local windows_home = os.getenv("USERPROFILE") or os.getenv("HOME")
 
-    config.default_prog = { "pwsh.exe", "-NoLogo" }
+    config.default_prog = msys2.default_zsh_args()
+    config.default_cwd = windows_home
     config.launch_menu = {
+      msys2_zsh,
+      msys2_bash,
       {
         label = "PowerShell",
         args = { "pwsh.exe", "-NoLogo" },
@@ -22,10 +27,6 @@ function M.sync(config, wezterm)
           "-Command",
           'Start-Process pwsh -Verb RunAs -ArgumentList "-NoLogo"',
         },
-      },
-      {
-        label = "MSYS2 zsh",
-        args = { msys2_zsh },
       },
       {
         label = "Ubuntu",
