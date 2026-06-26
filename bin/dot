@@ -216,7 +216,7 @@ sync_config() {
     return 1
   fi
 
-  "$CHEZMOI" --source "$SOURCE_DIR" apply
+  "$CHEZMOI" --source "$SOURCE_DIR" apply --force
 }
 
 sync_tmux_config() {
@@ -227,7 +227,7 @@ sync_tmux_config() {
     return 1
   fi
 
-  "$CHEZMOI" --source "$SOURCE_DIR" apply \
+  "$CHEZMOI" --source "$SOURCE_DIR" apply --force \
     "$HOME/.config/tmux/tmux.conf" \
     "$HOME/.config/tmux/tmux.conf.local"
 }

@@ -6,22 +6,16 @@ end
 
 function M.sync(config, wezterm)
   if is_windows(wezterm) then
-    local msys2_root = "C:/msys64"
-    local msys2_zsh = msys2_root .. "/usr/bin/zsh.exe"
-    local msys2_bash = msys2_root .. "/usr/bin/bash.exe"
+    local msys2 = require("user.msys2")
+    local msys2_zsh = msys2.zsh()
+    local msys2_bash = msys2.bash()
     local windows_home = os.getenv("USERPROFILE") or os.getenv("HOME")
 
-    config.default_prog = { msys2_zsh, "-l" }
+    config.default_prog = msys2.default_zsh_args()
     config.default_cwd = windows_home
     config.launch_menu = {
-      {
-        label = "MSYS2 Zsh",
-        args = { msys2_zsh, "-l" },
-      },
-      {
-        label = "MSYS2 Bash",
-        args = { msys2_bash, "-l" },
-      },
+      msys2_zsh,
+      msys2_bash,
       {
         label = "PowerShell",
         args = { "pwsh.exe", "-NoLogo" },

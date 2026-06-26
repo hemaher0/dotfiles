@@ -1014,13 +1014,19 @@ function Invoke-ChezmoiSync {
 
     $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
     Write-DotfilesLog "syncing Windows-native chezmoi targets to Windows home"
-    & $Chezmoi --source $SourceDir apply @WindowsTargets
+    & $Chezmoi --source $SourceDir apply --force @WindowsTargets
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 
     $Msys2Home = Get-Msys2HomePath
     New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
     $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
     Write-DotfilesLog "syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
-    & $Chezmoi --source $SourceDir --destination $Msys2Home apply @Msys2Targets
+    & $Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }
 
 function Invoke-PackageAction {

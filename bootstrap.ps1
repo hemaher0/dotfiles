@@ -485,13 +485,20 @@ function Invoke-ChezmoiSync {
 
     $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
     Write-DotfilesLog "fix: syncing Windows-native chezmoi targets to Windows home"
-    & $script:Chezmoi --source $SourceDir apply @WindowsTargets
+    & $script:Chezmoi --source $SourceDir apply --force @WindowsTargets
+    if ($LASTEXITCODE -ne 0) {
+        Mark-Warning "chezmoi Windows sync failed with exit code $LASTEXITCODE"
+        return
+    }
 
     $Msys2Home = Get-Msys2HomePath
     New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
     $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
     Write-DotfilesLog "fix: syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
-    & $script:Chezmoi --source $SourceDir --destination $Msys2Home apply @Msys2Targets
+    & $script:Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
+    if ($LASTEXITCODE -ne 0) {
+        Mark-Warning "chezmoi MSYS2 sync failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Invoke-FontInstall {
