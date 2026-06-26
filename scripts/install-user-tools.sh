@@ -65,6 +65,50 @@ direnv_asset() {
   esac
 }
 
+msys2_package_prefix() {
+  case "${MSYSTEM:-UCRT64}" in
+    UCRT64) printf '%s\n' "mingw-w64-ucrt-x86_64" ;;
+    MINGW64) printf '%s\n' "mingw-w64-x86_64" ;;
+    CLANG64) printf '%s\n' "mingw-w64-clang-x86_64" ;;
+    *)
+      log "unsupported MSYS2 environment: ${MSYSTEM:-unset}"
+      exit 1
+      ;;
+  esac
+}
+
+install_msys2_tool() {
+  package_prefix=$(msys2_package_prefix)
+
+  case "$1" in
+    zoxide) package_name="$package_prefix-zoxide" ;;
+    direnv) package_name="$package_prefix-direnv" ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+
+  log "installing MSYS2 package $package_name"
+  pacman -Sy --needed --noconfirm "$package_name"
+}
+
+install_msys2_tools() {
+  case "$tool_name" in
+    all)
+      install_msys2_tool zoxide
+      install_msys2_tool direnv
+      ;;
+    zoxide|direnv)
+      install_msys2_tool "$tool_name"
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
 install_zoxide() {
   target=$(zoxide_target)
   tmp_dir=$(mktemp -d)
@@ -102,6 +146,11 @@ command_name="${1:-install}"
 tool_name="${2:-all}"
 
 install_tools() {
+  if command -v pacman >/dev/null 2>&1 && uname -s | grep -Eq '^(MSYS|MINGW|UCRT|CLANG)_NT'; then
+    install_msys2_tools
+    return
+  fi
+
   case "$tool_name" in
     all)
       install_zoxide

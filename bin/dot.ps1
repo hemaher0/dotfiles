@@ -37,11 +37,8 @@ $WingetManagedPackages = @(
     @{ ComponentId = "package-git"; Id = "Git.Git" },
     @{ ComponentId = "package-msys2"; Id = "MSYS2.MSYS2" },
     @{ ComponentId = "package-chezmoi"; Id = "twpayne.chezmoi" },
-    @{ ComponentId = "package-nvim"; Id = "Neovim.Neovim" },
     @{ ComponentId = "package-wezterm"; Id = "wez.wezterm" },
-    @{ ComponentId = "dependency-rust"; Id = "Rustlang.Rustup" },
-    @{ ComponentId = "tool-zoxide"; Id = "ajeetdsouza.zoxide" },
-    @{ ComponentId = "tool-direnv"; Id = "direnv.direnv" }
+    @{ ComponentId = "dependency-rust"; Id = "Rustlang.Rustup" }
 )
 
 if ($Raw) { $CommandArgs += "--raw" }
@@ -160,6 +157,17 @@ function Convert-ChezmoiTargetToPath {
     )
 
     return Join-Path $Root ($Target -replace "/", "\")
+}
+
+function Ensure-ChezmoiTargetParents {
+    param([string[]]$Paths)
+
+    foreach ($Path in $Paths) {
+        $Parent = Split-Path -Parent $Path
+        if (-not [string]::IsNullOrWhiteSpace($Parent)) {
+            New-Item -ItemType Directory -Path $Parent -Force | Out-Null
+        }
+    }
 }
 
 function New-BackupPath {
@@ -617,7 +625,7 @@ function New-Msys2CommandRow {
         return New-ComponentRow "ok" "package" "msys2" "local" $Id $Name "winget" "present"
     }
 
-    return New-ComponentRow "missing" "package" "msys2" "local" $Id $Name "winget" "" "-" "-" "install" "package-msys2"
+    return New-ComponentRow "missing" "package" "msys2" "local" $Id $Name "pacman" "" "-" "-" "install" $Id
 }
 
 function New-Msys2ToolRow {
@@ -1107,6 +1115,7 @@ function Invoke-ChezmoiSync {
     Backup-StaleWindowsConfigPaths
 
     $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
+    Ensure-ChezmoiTargetParents -Paths $WindowsTargets
     Write-DotfilesLog "syncing Windows-native chezmoi targets to Windows home"
     & $Chezmoi --source $SourceDir apply --force @WindowsTargets
     if ($LASTEXITCODE -ne 0) {
@@ -1116,6 +1125,7 @@ function Invoke-ChezmoiSync {
     $Msys2Home = Get-Msys2HomePath
     New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
     $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
+    Ensure-ChezmoiTargetParents -Paths $Msys2Targets
     Write-DotfilesLog "syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
     & $Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
     if ($LASTEXITCODE -ne 0) {
@@ -1143,15 +1153,44 @@ function Invoke-ZshAction {
     & $ZshScript $ScriptAction
 }
 
+function Invoke-Msys2PackageAction {
+    param([string]$ComponentId)
+
+    $PackageName = switch ($ComponentId) {
+        "package-nvim" { "mingw-w64-ucrt-x86_64-neovim" }
+        default {
+            Write-DotfilesLog "MSYS2 package install is not supported for component: $ComponentId"
+            exit 1
+        }
+    }
+
+    $Bash = Resolve-Msys2Command "bash"
+    if ([string]::IsNullOrWhiteSpace($Bash)) {
+        Write-DotfilesLog "MSYS2 bash is required"
+        exit 1
+    }
+
+    Write-DotfilesLog "installing MSYS2 package $PackageName"
+    & $Bash -lc "pacman -Sy --needed --noconfirm $PackageName"
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 function Invoke-ToolAction {
     param(
         [string]$ActionName,
         [string]$ComponentId
     )
 
-    $ToolsScript = Join-Path (Join-Path $RootDir "scripts") "install-user-tools.ps1"
     $ScriptAction = if ($ActionName -eq "update") { "update" } else { "install" }
-    & $ToolsScript $ScriptAction $ComponentId
+    $ToolName = switch ($ComponentId) {
+        "tool-zoxide" { "zoxide" }
+        "tool-direnv" { "direnv" }
+        default { $ComponentId }
+    }
+
+    Invoke-Msys2RepoScript "scripts/install-user-tools.sh" @($ScriptAction, $ToolName)
 }
 
 function Invoke-FontAction {
@@ -1221,6 +1260,7 @@ function Invoke-ComponentAction {
         "^all-install$" { & $BootstrapScript; break }
         "^repo-dotfiles$" { Invoke-GitRoot pull --ff-only; break }
         "^package-zsh$" { Invoke-ZshAction $ActionName; break }
+        "^package-nvim$" { Invoke-Msys2PackageAction $ComponentId; break }
         "^(package-|dependency-rust)" { Invoke-PackageAction $ActionName $ComponentId; break }
         "^tool-" { Invoke-ToolAction $ActionName $ComponentId; break }
         "^font-" { Invoke-FontAction $ComponentId; break }

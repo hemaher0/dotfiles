@@ -106,6 +106,17 @@ function Convert-ChezmoiTargetToPath {
     return Join-Path $Root ($Target -replace "/", "\")
 }
 
+function Ensure-ChezmoiTargetParents {
+    param([string[]]$Paths)
+
+    foreach ($Path in $Paths) {
+        $Parent = Split-Path -Parent $Path
+        if (-not [string]::IsNullOrWhiteSpace($Parent)) {
+            New-Item -ItemType Directory -Path $Parent -Force | Out-Null
+        }
+    }
+}
+
 function New-BackupPath {
     param(
         [string]$Path,
@@ -236,7 +247,16 @@ function Add-InstallNeed {
         return
     }
 
-    $Values = @(Get-Variable -Name $ListName -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    $RawValues = Get-Variable -Name $ListName -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $Values = @()
+    foreach ($Value in @($RawValues)) {
+        foreach ($Item in @($Value)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$Item)) {
+                $Values += [string]$Item
+            }
+        }
+    }
+
     if ($Values -notcontains $ComponentId) {
         Set-Variable -Name $ListName -Scope Script -Value ($Values + $ComponentId)
     }
@@ -256,6 +276,10 @@ function Set-InstallNeed {
         "tools" {
             $script:NeedTools = $true
             Add-InstallNeed -ListName "MissingToolIds" -ComponentId $ComponentId
+        }
+        "msys2-packages" {
+            $script:NeedMsys2Packages = $true
+            Add-InstallNeed -ListName "MissingMsys2PackageIds" -ComponentId $ComponentId
         }
         "none" { }
     }
@@ -467,7 +491,9 @@ function Invoke-DoctorCheck {
     $script:NeedPackages = $false
     $script:NeedTools = $false
     $script:NeedMsys2Zsh = $false
+    $script:NeedMsys2Packages = $false
     $script:MissingPackageIds = @()
+    $script:MissingMsys2PackageIds = @()
     $script:MissingToolIds = @()
     $script:MissingFontIds = @()
     $script:MissingNvimPluginIds = @()
@@ -479,7 +505,7 @@ function Invoke-DoctorCheck {
     Test-Msys2ZshStatus
     Test-CommandStatus -Name $script:Chezmoi -InstallGroup "packages" -ComponentId "package-chezmoi" -Label "chezmoi"
     Test-CommandStatus -Name "pwsh" -InstallGroup "packages" -ComponentId "package-pwsh"
-    Test-Msys2CommandStatus -Name "nvim" -InstallGroup "packages" -ComponentId "package-msys2" -Label "MSYS2 nvim"
+    Test-Msys2CommandStatus -Name "nvim" -InstallGroup "msys2-packages" -ComponentId "package-nvim" -Label "MSYS2 nvim"
     Test-CommandStatus -Name "rustc" -InstallGroup "packages" -ComponentId "dependency-rust"
     Test-CommandStatus -Name "cargo" -InstallGroup "packages" -ComponentId "dependency-rust"
     Test-Msys2CommandStatus -Name "zoxide" -InstallGroup "tools" -ComponentId "tool-zoxide"
@@ -568,6 +594,7 @@ function Invoke-ChezmoiSync {
     Backup-StaleWindowsConfigPaths
 
     $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
+    Ensure-ChezmoiTargetParents -Paths $WindowsTargets
     Write-DotfilesLog "fix: syncing Windows-native chezmoi targets to Windows home"
     & $script:Chezmoi --source $SourceDir apply --force @WindowsTargets
     if ($LASTEXITCODE -ne 0) {
@@ -578,6 +605,7 @@ function Invoke-ChezmoiSync {
     $Msys2Home = Get-Msys2HomePath
     New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
     $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
+    Ensure-ChezmoiTargetParents -Paths $Msys2Targets
     Write-DotfilesLog "fix: syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
     & $script:Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
     if ($LASTEXITCODE -ne 0) {
@@ -605,7 +633,7 @@ function Invoke-FontInstall {
 }
 
 function Invoke-UserToolsInstall {
-    $ToolsScript = Join-Path (Join-Path $RootDir "scripts") "install-user-tools.ps1"
+    $ToolsScript = Join-Path (Join-Path $RootDir "scripts") "install-user-tools.sh"
 
     if (Test-Path -Path $ToolsScript -PathType Leaf) {
         $ToolIds = @($script:MissingToolIds)
@@ -614,13 +642,47 @@ function Invoke-UserToolsInstall {
         }
 
         foreach ($ToolId in $ToolIds) {
-            Write-DotfilesLog "fix: installing Windows user tool $ToolId"
-            & $ToolsScript install $ToolId
+            $ToolName = switch ($ToolId) {
+                "tool-zoxide" { "zoxide" }
+                "tool-direnv" { "direnv" }
+                default { $ToolId }
+            }
+
+            Write-DotfilesLog "fix: installing MSYS2 user tool $ToolName"
+            Invoke-Msys2RepoScript "scripts/install-user-tools.sh" @("install", $ToolName)
         }
-        Update-ProcessPath
     }
     else {
-        Mark-Missing "Windows user tools install script"
+        Mark-Missing "MSYS2 user tools install script"
+    }
+}
+
+function Invoke-Msys2PackageInstall {
+    $PackageIds = @($script:MissingMsys2PackageIds)
+    if ($PackageIds.Count -eq 0) {
+        return
+    }
+
+    $Bash = Resolve-Msys2Command "bash"
+    if ([string]::IsNullOrWhiteSpace($Bash)) {
+        Mark-Warning "skipping MSYS2 package install because MSYS2 bash is unavailable"
+        return
+    }
+
+    foreach ($PackageId in $PackageIds) {
+        $PackageName = switch ($PackageId) {
+            "package-nvim" { "mingw-w64-ucrt-x86_64-neovim" }
+            default {
+                Mark-Warning "unknown MSYS2 package component: $PackageId"
+                continue
+            }
+        }
+
+        Write-DotfilesLog "fix: installing MSYS2 package $PackageName"
+        & $Bash -lc "pacman -Sy --needed --noconfirm $PackageName"
+        if ($LASTEXITCODE -ne 0) {
+            Mark-Warning "MSYS2 package install failed with exit code $LASTEXITCODE"
+        }
     }
 }
 
@@ -687,6 +749,10 @@ function Invoke-DoctorFix {
 
     if ($script:NeedMsys2Zsh) {
         Invoke-Msys2ZshInstall
+    }
+
+    if ($script:NeedMsys2Packages) {
+        Invoke-Msys2PackageInstall
     }
 
     if ($script:NeedFonts) {
