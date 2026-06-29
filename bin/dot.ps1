@@ -1,3 +1,5 @@
+#!/usr/bin/env pwsh
+
 param(
     [Parameter(Position = 0)]
     [string]$CommandName = "help",
@@ -356,6 +358,18 @@ function Invoke-GitRoot {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
 
     & git -c "safe.directory=$RootDir" -C $RootDir @Args
+}
+
+function Update-GitRoot {
+    Invoke-GitRoot fetch origin main
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    Invoke-GitRoot merge --ff-only FETCH_HEAD
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }
 
 function Invoke-GitDev {
@@ -1313,7 +1327,7 @@ function Invoke-ComponentAction {
             break
         }
         "^all-install$" { & $BootstrapScript; break }
-        "^repo-dotfiles$" { Invoke-GitRoot pull --ff-only; break }
+        "^repo-dotfiles$" { Update-GitRoot; break }
         "^package-zsh$" { Invoke-ZshAction $ActionName; break }
         "^package-(nvim|node)$" { Invoke-Msys2PackageAction $ComponentId; break }
         "^(package-|dependency-rust)" { Invoke-PackageAction $ActionName $ComponentId; break }
@@ -1423,7 +1437,7 @@ function Invoke-UpdateCommand {
             }
 
             Write-DotfilesLog "updating repository"
-            Invoke-GitRoot pull --ff-only
+            Update-GitRoot
             Write-DotfilesLog "component status"
             Write-ComponentTable
         }

@@ -1,3 +1,5 @@
+#!/usr/bin/env pwsh
+
 param()
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +32,18 @@ function Invoke-GitRoot {
     & git -c "safe.directory=$RootDir" -C $RootDir @Args
 }
 
+function Update-GitRoot {
+    Invoke-GitRoot fetch origin main
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    Invoke-GitRoot merge --ff-only FETCH_HEAD
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 function Invoke-Check {
     if (-not (Test-Path -Path $BootstrapScript -PathType Leaf)) {
         Write-DotfilesLog "bootstrap script is missing: $BootstrapScript"
@@ -47,7 +61,10 @@ if (-not (Test-Command "git")) {
 }
 
 Write-DotfilesLog "updating repository"
-Invoke-GitRoot pull --ff-only
+Update-GitRoot
 
 Write-DotfilesLog "checking setup"
 Invoke-Check
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
