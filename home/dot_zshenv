@@ -5,6 +5,17 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]] && command -v cygpath >/dev/null 2>&1; then
+  for dotfiles_path_var in XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME ZDOTDIR ANTIDOTE_DIR ANTIDOTE_HOME ANTIDOTE_SCRIPT; do
+    dotfiles_path_value="${(P)dotfiles_path_var:-}"
+    if [[ "$dotfiles_path_value" == [[:alpha:]]:/* || "$dotfiles_path_value" == [[:alpha:]]:\\* ]]; then
+      export "$dotfiles_path_var=$(cygpath -u "$dotfiles_path_value")"
+    fi
+  done
+
+  unset dotfiles_path_var dotfiles_path_value
+fi
+
 export ZSH_CONFIG_DIR="${ZSH_CONFIG_DIR:-$XDG_CONFIG_HOME/zsh}"
 export ZSH_CACHE_DIR="${ZSH_CACHE_DIR:-$XDG_CACHE_HOME/zsh}"
 

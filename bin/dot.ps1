@@ -102,6 +102,14 @@ function Resolve-Msys2Command {
         }
     }
 
+    $Msys2Home = Join-Path (Join-Path $Msys2Root "home") $env:USERNAME
+    foreach ($Suffix in @("$Name.exe", $Name)) {
+        $Candidate = Join-Path (Join-Path $Msys2Home ".local\bin") $Suffix
+        if (Test-Path -Path $Candidate -PathType Leaf) {
+            return $Candidate
+        }
+    }
+
     $Command = Get-Command $Name -ErrorAction SilentlyContinue
     if ($Command -and $Command.Source -like "$Msys2Root*") {
         return $Command.Source
@@ -245,7 +253,7 @@ function Invoke-Msys2RepoScript {
     $env:DOTFILES_ROOT = $RootDir
     $env:DOTFILES_SCRIPT = $ScriptPath
     try {
-        & $Bash -lc 'export PATH="/ucrt64/bin:/mingw64/bin:/clang64/bin:/clangarm64/bin:$PATH"; export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"; export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"; export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"; export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"; cd "$(cygpath -u "$DOTFILES_ROOT")" && "$DOTFILES_SCRIPT" "$@"' dotfiles @ScriptArgs
+        & $Bash -lc 'export PATH="/ucrt64/bin:/mingw64/bin:/clang64/bin:/clangarm64/bin:$PATH"; export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"; export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"; export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"; export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"; cd "$(cygpath -u "$DOTFILES_ROOT")" && sh "$DOTFILES_SCRIPT" "$@"' dotfiles @ScriptArgs
     }
     finally {
         $env:DOTFILES_ROOT = $PreviousRoot

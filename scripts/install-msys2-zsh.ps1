@@ -107,7 +107,7 @@ function Install-ZshPlugins {
 
     $RepoPath = ConvertTo-MsysPath $RootDir
     Write-DotfilesLog "installing zsh plugins with MSYS2"
-    Invoke-Msys2Bash "cd '$RepoPath' && ./scripts/install-antidote.sh install && ./scripts/install-antidote.sh update"
+    Invoke-Msys2Bash "cd '$RepoPath' && sh ./scripts/install-antidote.sh install && sh ./scripts/install-antidote.sh update"
 }
 
 if ($Command -eq "help") {

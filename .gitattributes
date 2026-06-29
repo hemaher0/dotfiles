@@ -1,0 +1,2 @@
+*.sh text eol=lf
+bin/dot text eol=lf

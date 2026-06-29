@@ -27,14 +27,28 @@ download() {
   url=$1
   output=$2
 
-  if has_command curl; then
-    curl -fL "$url" -o "$output"
-  elif has_command wget; then
-    wget -O "$output" "$url"
-  else
-    log "curl or wget is required to download user-local tools"
-    exit 1
+  if is_msys2_runtime && has_command powershell.exe && has_command cygpath; then
+    output_windows=$(cygpath -w "$output")
+    DOTFILES_DOWNLOAD_URL=$url DOTFILES_DOWNLOAD_OUTPUT=$output_windows powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = "SilentlyContinue"; Invoke-WebRequest -Uri $env:DOTFILES_DOWNLOAD_URL -OutFile $env:DOTFILES_DOWNLOAD_OUTPUT'
+    return
   fi
+
+  if has_command curl && curl -fL "$url" -o "$output"; then
+    return
+  fi
+
+  if has_command wget && wget -O "$output" "$url"; then
+    return
+  fi
+
+  if has_command powershell.exe && has_command cygpath; then
+    output_windows=$(cygpath -w "$output")
+    DOTFILES_DOWNLOAD_URL=$url DOTFILES_DOWNLOAD_OUTPUT=$output_windows powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = "SilentlyContinue"; Invoke-WebRequest -Uri $env:DOTFILES_DOWNLOAD_URL -OutFile $env:DOTFILES_DOWNLOAD_OUTPUT'
+    return
+  fi
+
+  log "curl, wget, or powershell.exe is required to download user-local tools"
+  exit 1
 }
 
 zoxide_target() {
@@ -58,6 +72,8 @@ direnv_asset() {
   case "$os:$arch" in
     Linux:x86_64) printf '%s\n' "direnv.linux-amd64" ;;
     Linux:aarch64|Linux:arm64) printf '%s\n' "direnv.linux-arm64" ;;
+    MINGW*_NT*:x86_64|MSYS_NT*:x86_64|UCRT*_NT*:x86_64|CLANG*_NT*:x86_64) printf '%s\n' "direnv.windows-amd64" ;;
+    MINGW*_NT*:aarch64|MINGW*_NT*:arm64|MSYS_NT*:aarch64|MSYS_NT*:arm64|UCRT*_NT*:aarch64|UCRT*_NT*:arm64|CLANG*_NT*:aarch64|CLANG*_NT*:arm64) printf '%s\n' "direnv.windows-arm64" ;;
     *)
       log "unsupported direnv platform: $os $arch"
       exit 1
@@ -82,7 +98,10 @@ install_msys2_tool() {
 
   case "$1" in
     zoxide) package_name="$package_prefix-zoxide" ;;
-    direnv) package_name="$package_prefix-direnv" ;;
+    direnv)
+      install_direnv
+      return
+      ;;
     *)
       usage
       exit 1
@@ -105,6 +124,19 @@ install_msys2_tools() {
     *)
       usage
       exit 1
+      ;;
+  esac
+}
+
+is_msys2_runtime() {
+  command -v pacman >/dev/null 2>&1 || return 1
+
+  case "$(uname -s)" in
+    MSYS_NT*|MINGW*_NT*|UCRT*_NT*|CLANG*_NT*)
+      return 0
+      ;;
+    *)
+      return 1
       ;;
   esac
 }
@@ -138,15 +170,23 @@ install_direnv() {
 
   log "installing direnv $DIRENV_VERSION"
   mkdir -p "$BIN_DIR"
-  download "$url" "$BIN_DIR/direnv"
-  chmod +x "$BIN_DIR/direnv"
+  case "$asset" in
+    direnv.windows-*)
+      download "$url" "$BIN_DIR/direnv.exe"
+      chmod +x "$BIN_DIR/direnv.exe"
+      ;;
+    *)
+      download "$url" "$BIN_DIR/direnv"
+      chmod +x "$BIN_DIR/direnv"
+      ;;
+  esac
 }
 
 command_name="${1:-install}"
 tool_name="${2:-all}"
 
 install_tools() {
-  if command -v pacman >/dev/null 2>&1 && uname -s | grep -Eq '^(MSYS|MINGW|UCRT|CLANG)_NT'; then
+  if is_msys2_runtime; then
     install_msys2_tools
     return
   fi
