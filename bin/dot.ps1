@@ -150,6 +150,33 @@ function Get-Msys2ChezmoiTargets {
     )
 }
 
+function Get-WindowsChezmoiTargetsForComponent {
+    param([string]$ComponentId = "")
+
+    switch ($ComponentId) {
+        "" { return Get-WindowsChezmoiTargets }
+        "config-wezterm" { return @(".config/wezterm") }
+        "config-wezterm-smart-splits" { return @(".config/wezterm/user/smart_splits.lua") }
+        default { return @() }
+    }
+}
+
+function Get-Msys2ChezmoiTargetsForComponent {
+    param([string]$ComponentId = "")
+
+    switch ($ComponentId) {
+        "" { return Get-Msys2ChezmoiTargets }
+        "config-zshenv" { return @(".zshenv") }
+        "config-zshrc" { return @(".zshrc") }
+        "config-p10k" { return @(".p10k.zsh") }
+        "config-zsh-plugins" { return @(".config/zsh/plugins.txt") }
+        "config-nvim" { return @(".config/nvim") }
+        "config-nvim-lite" { return @(".config/nvim-lite") }
+        "config-tmux" { return @(".config/tmux") }
+        default { return @() }
+    }
+}
+
 function Convert-ChezmoiTargetToPath {
     param(
         [string]$Root,
@@ -622,7 +649,7 @@ function New-Msys2CommandRow {
 
     $Missing = @($Commands | Where-Object { -not (Test-Msys2Command $_) })
     if ($Missing.Count -eq 0) {
-        return New-ComponentRow "ok" "package" "msys2" "local" $Id $Name "winget" "present"
+        return New-ComponentRow "ok" "package" "msys2" "local" $Id $Name "pacman" "present"
     }
 
     return New-ComponentRow "missing" "package" "msys2" "local" $Id $Name "pacman" "" "-" "-" "install" $Id
@@ -1001,6 +1028,7 @@ function Get-ComponentRows {
     $Rows += New-Msys2ZshRow
     $Rows += New-PowerShellRow
     $Rows += New-Msys2CommandRow "package-nvim" "MSYS2 nvim" @("nvim")
+    $Rows += New-Msys2CommandRow "package-node" "MSYS2 Node.js" @("node", "npm")
     $Rows += New-CommandRow "package" "system" "system" "package-wezterm" "WezTerm" "package" @("wezterm")
     $Rows += New-CommandRow "dependency" "rustup" "local" "dependency-rust" "Rust toolchain" "rustup" @("rustc", "cargo")
     $Rows += New-Msys2ToolRow "tool-zoxide" "MSYS2 zoxide" @("zoxide")
@@ -1097,6 +1125,8 @@ function Write-ComponentTable {
 }
 
 function Invoke-ChezmoiSync {
+    param([string]$ComponentId = "")
+
     Update-ProcessPath
 
     $Chezmoi = Resolve-Chezmoi
@@ -1112,24 +1142,38 @@ function Invoke-ChezmoiSync {
         exit 1
     }
 
-    Backup-StaleWindowsConfigPaths
+    $WindowsTargetNames = @(Get-WindowsChezmoiTargetsForComponent $ComponentId)
+    $Msys2TargetNames = @(Get-Msys2ChezmoiTargetsForComponent $ComponentId)
 
-    $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
-    Ensure-ChezmoiTargetParents -Paths $WindowsTargets
-    Write-DotfilesLog "syncing Windows-native chezmoi targets to Windows home"
-    & $Chezmoi --source $SourceDir apply --force @WindowsTargets
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+    if (-not [string]::IsNullOrWhiteSpace($ComponentId) -and $WindowsTargetNames.Count -eq 0 -and $Msys2TargetNames.Count -eq 0) {
+        Write-DotfilesLog "config sync is not supported for component: $ComponentId"
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ComponentId)) {
+        Backup-StaleWindowsConfigPaths
+    }
+
+    if ($WindowsTargetNames.Count -gt 0) {
+        $WindowsTargets = @($WindowsTargetNames | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
+        Ensure-ChezmoiTargetParents -Paths $WindowsTargets
+        Write-DotfilesLog "syncing Windows-native chezmoi targets to Windows home"
+        & $Chezmoi --source $SourceDir --destination $HOME apply --force @WindowsTargets
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 
     $Msys2Home = Get-Msys2HomePath
-    New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
-    $Msys2Targets = @(Get-Msys2ChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
-    Ensure-ChezmoiTargetParents -Paths $Msys2Targets
-    Write-DotfilesLog "syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
-    & $Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+    if ($Msys2TargetNames.Count -gt 0) {
+        New-Item -ItemType Directory -Path $Msys2Home -Force | Out-Null
+        $Msys2Targets = @($Msys2TargetNames | ForEach-Object { Convert-ChezmoiTargetToPath -Root $Msys2Home -Target $_ })
+        Ensure-ChezmoiTargetParents -Paths $Msys2Targets
+        Write-DotfilesLog "syncing MSYS2 chezmoi targets to MSYS2 home $Msys2Home"
+        & $Chezmoi --source $SourceDir --destination $Msys2Home apply --force @Msys2Targets
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 }
 
@@ -1158,6 +1202,7 @@ function Invoke-Msys2PackageAction {
 
     $PackageName = switch ($ComponentId) {
         "package-nvim" { "mingw-w64-ucrt-x86_64-neovim" }
+        "package-node" { "mingw-w64-ucrt-x86_64-nodejs" }
         default {
             Write-DotfilesLog "MSYS2 package install is not supported for component: $ComponentId"
             exit 1
@@ -1260,7 +1305,7 @@ function Invoke-ComponentAction {
         "^all-install$" { & $BootstrapScript; break }
         "^repo-dotfiles$" { Invoke-GitRoot pull --ff-only; break }
         "^package-zsh$" { Invoke-ZshAction $ActionName; break }
-        "^package-nvim$" { Invoke-Msys2PackageAction $ComponentId; break }
+        "^package-(nvim|node)$" { Invoke-Msys2PackageAction $ComponentId; break }
         "^(package-|dependency-rust)" { Invoke-PackageAction $ActionName $ComponentId; break }
         "^tool-" { Invoke-ToolAction $ActionName $ComponentId; break }
         "^font-" { Invoke-FontAction $ComponentId; break }
@@ -1275,7 +1320,7 @@ function Invoke-ComponentAction {
             exit 1
         }
         "^config-" {
-            Invoke-ChezmoiSync
+            Invoke-ChezmoiSync $ComponentId
             break
         }
         default {

@@ -68,6 +68,7 @@ Check Windows component status, including the pinned PowerShell release target, 
 .\bin\dot.ps1 update --check
 .\bin\dot.ps1 update --update package-pwsh
 .\bin\dot.ps1 update --install package-zsh
+.\bin\dot.ps1 update --install package-node
 .\bin\dot.ps1 update --install plugin-zsh
 ```
 

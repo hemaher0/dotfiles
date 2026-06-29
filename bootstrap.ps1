@@ -506,6 +506,8 @@ function Invoke-DoctorCheck {
     Test-CommandStatus -Name $script:Chezmoi -InstallGroup "packages" -ComponentId "package-chezmoi" -Label "chezmoi"
     Test-CommandStatus -Name "pwsh" -InstallGroup "packages" -ComponentId "package-pwsh"
     Test-Msys2CommandStatus -Name "nvim" -InstallGroup "msys2-packages" -ComponentId "package-nvim" -Label "MSYS2 nvim"
+    Test-Msys2CommandStatus -Name "node" -InstallGroup "msys2-packages" -ComponentId "package-node" -Label "MSYS2 Node.js"
+    Test-Msys2CommandStatus -Name "npm" -InstallGroup "msys2-packages" -ComponentId "package-node" -Label "MSYS2 npm"
     Test-CommandStatus -Name "rustc" -InstallGroup "packages" -ComponentId "dependency-rust"
     Test-CommandStatus -Name "cargo" -InstallGroup "packages" -ComponentId "dependency-rust"
     Test-Msys2CommandStatus -Name "zoxide" -InstallGroup "tools" -ComponentId "tool-zoxide"
@@ -596,7 +598,7 @@ function Invoke-ChezmoiSync {
     $WindowsTargets = @(Get-WindowsChezmoiTargets | ForEach-Object { Convert-ChezmoiTargetToPath -Root $HOME -Target $_ })
     Ensure-ChezmoiTargetParents -Paths $WindowsTargets
     Write-DotfilesLog "fix: syncing Windows-native chezmoi targets to Windows home"
-    & $script:Chezmoi --source $SourceDir apply --force @WindowsTargets
+    & $script:Chezmoi --source $SourceDir --destination $HOME apply --force @WindowsTargets
     if ($LASTEXITCODE -ne 0) {
         Mark-Warning "chezmoi Windows sync failed with exit code $LASTEXITCODE"
         return
@@ -672,6 +674,7 @@ function Invoke-Msys2PackageInstall {
     foreach ($PackageId in $PackageIds) {
         $PackageName = switch ($PackageId) {
             "package-nvim" { "mingw-w64-ucrt-x86_64-neovim" }
+            "package-node" { "mingw-w64-ucrt-x86_64-nodejs" }
             default {
                 Mark-Warning "unknown MSYS2 package component: $PackageId"
                 continue

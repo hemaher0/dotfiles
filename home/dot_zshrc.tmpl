@@ -24,11 +24,13 @@ if [[ -d "$ZSH_CONFIG_DIR/pre" ]]; then
   done
 fi
 
-if [[ -r "$ANTIDOTE_SCRIPT" && -r "$ZSH_PLUGIN_FILE" ]]; then
+if [[ -s "$ZSH_PLUGIN_BUNDLE" && -r "$ZSH_PLUGIN_FILE" && ! "$ZSH_PLUGIN_FILE" -nt "$ZSH_PLUGIN_BUNDLE" ]]; then
+  source "$ZSH_PLUGIN_BUNDLE"
+elif [[ -r "$ANTIDOTE_SCRIPT" && -r "$ZSH_PLUGIN_FILE" ]]; then
   source "$ANTIDOTE_SCRIPT"
   mkdir -p "$ZSH_CACHE_DIR"
 
-  if [[ ! -s "$ZSH_PLUGIN_BUNDLE" || "$ZSH_PLUGIN_FILE" -nt "$ZSH_PLUGIN_BUNDLE" || "$ANTIDOTE_SCRIPT" -nt "$ZSH_PLUGIN_BUNDLE" ]]; then
+  if [[ ! -s "$ZSH_PLUGIN_BUNDLE" || "$ZSH_PLUGIN_FILE" -nt "$ZSH_PLUGIN_BUNDLE" ]]; then
     zsh_plugin_bundle_tmp="${ZSH_PLUGIN_BUNDLE}.$$"
     if antidote bundle < "$ZSH_PLUGIN_FILE" >| "$zsh_plugin_bundle_tmp"; then
       mv -f "$zsh_plugin_bundle_tmp" "$ZSH_PLUGIN_BUNDLE"
