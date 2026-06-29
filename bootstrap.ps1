@@ -43,9 +43,11 @@ function Resolve-Msys2Command {
     }
 
     foreach ($Prefix in @("ucrt64", "mingw64", "clang64", "clangarm64")) {
-        $Candidate = Join-Path (Join-Path $Msys2Root "$Prefix\bin") "$Name.exe"
-        if (Test-Path -Path $Candidate -PathType Leaf) {
-            return $Candidate
+        foreach ($Suffix in @("$Name.exe", $Name)) {
+            $Candidate = Join-Path (Join-Path $Msys2Root "$Prefix\bin") $Suffix
+            if (Test-Path -Path $Candidate -PathType Leaf) {
+                return $Candidate
+            }
         }
     }
 
